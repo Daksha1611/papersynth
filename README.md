@@ -57,7 +57,7 @@ Pre-alpha, under active construction. Building the minimal viable architecture f
 - [x] Align + VALUE_CONFLICT detection
 - [x] Policy engine with ESCALATED fallback
 - [x] Spec builder + provenance closure gate
-- [ ] CLI wiring for the full pipeline
+- [x] CLI wiring for the full pipeline
 - [x] Gap check (`missing_but_critical`) — static checklist pass
 - [ ] Remaining extractors: equation, algorithm
 
@@ -90,10 +90,24 @@ curl -s http://localhost:8070/api/isalive   # expect: true
 ## Development
 
 ```bash
-pytest                        # unit + integration, no network
+pytest                        # unit + e2e + regressions, no network
 ruff check . && ruff format --check .
 mypy papersynth
 ```
+
+### The review flow
+
+```bash
+papersynth run --papers a.tex,b.tex,c.tex --objective "..." --out runs/demo
+papersynth conflicts runs/demo --status open      # exits 2 while any remain
+papersynth resolve   runs/demo ctr_ce42684b --select clm_11f315 --note "why"
+papersynth gaps      runs/demo
+papersynth spec      runs/demo --format yaml
+papersynth approve   runs/demo --reviewer you
+```
+
+`resolve` re-emits the spec from stage artifacts without re-extracting anything, so a
+human decision costs no model calls.
 
 Tests never hit a live model. LLM interactions are recorded as cassettes and replayed, so CI is deterministic and free. A nightly job re-records against the real model and diffs the resulting specs — a diff signals prompt or model drift.
 

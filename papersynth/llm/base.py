@@ -45,10 +45,18 @@ class Completion:
 
 @runtime_checkable
 class LLMProvider(Protocol):
-    """The one interface stages see."""
+    """The one interface stages see.
 
-    provider_id: str
-    model: str
+    Declared read-only so a provider may expose `model` as a plain attribute or
+    as a property. The router does the latter - it has no single model of its
+    own, it reports whichever leg of the chain is currently first.
+    """
+
+    @property
+    def provider_id(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
 
     def complete(
         self,

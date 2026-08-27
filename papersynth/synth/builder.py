@@ -62,6 +62,7 @@ class SpecBuilder:
 
         resolved_ids = _resolved_ids(reconciliation)
         disputed = self._disputed_scopes(contradictions, resolved_ids)
+        superseded = self._superseded_claims(contradictions, reconciliation)
 
         return {
             "spec_version": papersynth.SPEC_VERSION,
@@ -69,7 +70,7 @@ class SpecBuilder:
             "generated_at": utcnow(),
             "source_papers": [_paper_entry(d) for d in self.documents],
             "objective": self.objective,
-            "components": self._components(disputed, reconciliation),
+            "components": self._components(disputed, superseded, reconciliation),
             "open_conflicts": self._open_conflicts(contradictions, reconciliation),
             "resolved_conflicts": _resolved_conflicts(reconciliation),
             "missing_but_critical": [_gap_entry(g) for g in gaps],
@@ -113,9 +114,61 @@ class SpecBuilder:
                 )
         return disputed
 
+    def _superseded_claims(
+        self,
+        contradictions: list[Contradiction],
+        reconciliation: ReconciliationResult | None,
+    ) -> set[str]:
+        """Claims a resolution decided against.
+
+        Resolving a conflict removes its scope from `disputed`, which would
+        otherwise release every claim in that scope back into the spec -
+        including the values the resolution rejected. The spec would then state
+        both 0.0001 and 0.0003 for the same parameter under the same condition,
+        reinstating the exact contradiction a human had just settled.
+
+        Losers are identified by value rather than by claim id, so a third
+        paper repeating a rejected value is dropped too, while one repeating
+        the winning value is kept and contributes its provenance.
+        """
+        if reconciliation is None:
+            return set()
+
+        superseded: set[str] = set()
+        by_id = {c.contradiction_id: c for c in contradictions}
+
+        for resolution in reconciliation.resolutions:
+            if resolution.is_open or not resolution.selected_claim_id:
+                continue
+            contradiction = by_id.get(resolution.contradiction_id)
+            winner = self.claims.get(resolution.selected_claim_id)
+            if contradiction is None or winner is None:
+                continue
+
+            scope = (
+                str(winner.payload.get("canonical_name")),
+                normalize_condition(winner.payload.get("condition")),
+            )
+            winning_value = _value_key(winner.payload.get("value"))
+
+            for claim in self.claims.values():
+                if claim.claim_id == winner.claim_id:
+                    continue
+                claim_scope = (
+                    str(claim.payload.get("canonical_name")),
+                    normalize_condition(claim.payload.get("condition")),
+                )
+                if claim_scope != scope:
+                    continue
+                if _value_key(claim.payload.get("value")) != winning_value:
+                    superseded.add(claim.claim_id)
+
+        return superseded
+
     def _components(
         self,
         disputed: set[tuple[str, str]],
+        superseded: set[str],
         reconciliation: ReconciliationResult | None,
     ) -> list[dict[str, Any]]:
         grouped: dict[str, list[Claim]] = defaultdict(list)
@@ -128,7 +181,9 @@ class SpecBuilder:
         for target, claims in sorted(grouped.items()):
             # A value still under dispute must not be emitted as settled; it
             # appears in open_conflicts instead, for the implementer.
-            settled = [c for c in claims if not _is_disputed(c, disputed)]
+            settled = [
+                c for c in claims if not _is_disputed(c, disputed) and c.claim_id not in superseded
+            ]
             hyperparameters = self._merge_agreeing(settled, reconciliation)
             refs = sorted({c.claim_id for c in claims})
             components.append(

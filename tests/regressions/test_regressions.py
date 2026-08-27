@@ -16,6 +16,7 @@ from papersynth.core.models import (
     Position,
     Provenance,
     ReconciliationResult,
+    Resolution,
     Support,
 )
 from papersynth.reconcile import Policy, PolicyEngine
@@ -60,7 +61,11 @@ def hyperparameter_claim(
     )
 
 
-def build_spec(claims: list[Claim], contradictions: list[Contradiction]) -> dict:
+def build_spec(
+    claims: list[Claim],
+    contradictions: list[Contradiction],
+    reconciliation: ReconciliationResult | None = None,
+) -> dict:
     docs = [make_doc(pid) for pid in sorted({c.paper_id for c in claims})]
     builder = SpecBuilder(
         run_id="run_regression",
@@ -70,7 +75,8 @@ def build_spec(claims: list[Claim], contradictions: list[Contradiction]) -> dict
     )
     return builder.build(
         contradictions=contradictions,
-        reconciliation=ReconciliationResult(policy_version="1.0.0", resolutions=[]),
+        reconciliation=reconciliation
+        or ReconciliationResult(policy_version="1.0.0", resolutions=[]),
     )
 
 
@@ -253,3 +259,77 @@ class TestR003DuplicatedAgreement:
 
         conditions = sorted(hp["condition"] for hp in emitted(spec, "learning_rate"))
         assert conditions == ["base model", "large model"]
+
+
+class TestR004SupersededValueReemitted:
+    """Resolving a conflict removed its scope from the disputed set, which
+    released every claim in that scope back into the spec - including the
+    values the resolution had just rejected. The spec then stated both 0.0001
+    and 0.0003 for the same parameter under the same condition, reinstating
+    the contradiction a human had settled seconds earlier."""
+
+    @pytest.fixture
+    def claims(self):
+        return [
+            hyperparameter_claim("paper_a", "learning_rate", 0.0001, "base model", "clm_aaaaaa"),
+            hyperparameter_claim("paper_b", "learning_rate", 0.0003, "base model", "clm_bbbbbb"),
+            hyperparameter_claim("paper_c", "learning_rate", 0.0001, "base model", "clm_cccccc"),
+            hyperparameter_claim("paper_c", "learning_rate", 5e-05, "large model", "clm_dddddd"),
+        ]
+
+    @pytest.fixture
+    def contradiction(self):
+        return Contradiction(
+            contradiction_id="ctr_r004",
+            cluster_id="cnc_hype_learning_rate",
+            type="VALUE_CONFLICT",
+            severity="MATERIAL",
+            description="two papers disagree",
+            positions=[
+                Position(claim_id="clm_aaaaaa", paper_id="paper_a", position="0.0001"),
+                Position(claim_id="clm_bbbbbb", paper_id="paper_b", position="0.0003"),
+            ],
+            detected_by="value_conflict_detector@1.0.0",
+        )
+
+    @pytest.fixture
+    def resolved(self, contradiction):
+        return ReconciliationResult(
+            policy_version="1.0.0",
+            resolutions=[
+                Resolution(
+                    resolution_id="res_r004",
+                    contradiction_id="ctr_r004",
+                    outcome="SELECTED",
+                    selected_claim_id="clm_aaaaaa",
+                    rule_fired=None,
+                    rationale="human review",
+                    resolved_by="human",
+                )
+            ],
+        )
+
+    def test_the_rejected_value_is_not_emitted(self, claims, contradiction, resolved):
+        spec = build_spec(claims, [contradiction], resolved)
+        values = [hp["value"] for hp in emitted(spec, "learning_rate")]
+        assert 0.0003 not in values, "resolving a conflict must not re-emit the loser"
+
+    def test_the_selected_value_is_emitted(self, claims, contradiction, resolved):
+        spec = build_spec(claims, [contradiction], resolved)
+        base = [hp for hp in emitted(spec, "learning_rate") if hp["condition"] == "base model"]
+        assert len(base) == 1
+        assert base[0]["value"] == 0.0001
+
+    def test_an_agreeing_duplicate_still_contributes_provenance(
+        self, claims, contradiction, resolved
+    ):
+        """Losers are dropped by value, not by claim id, so a third paper
+        repeating the winning value is kept rather than discarded with it."""
+        spec = build_spec(claims, [contradiction], resolved)
+        base = next(hp for hp in emitted(spec, "learning_rate") if hp["condition"] == "base model")
+        assert base["provenance_refs"] == ["clm_aaaaaa", "clm_cccccc"]
+
+    def test_a_differently_scoped_value_is_untouched(self, claims, contradiction, resolved):
+        spec = build_spec(claims, [contradiction], resolved)
+        large = [hp for hp in emitted(spec, "learning_rate") if hp["condition"] == "large model"]
+        assert [hp["value"] for hp in large] == [5e-05]
