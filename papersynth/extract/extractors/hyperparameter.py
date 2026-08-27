@@ -107,7 +107,7 @@ class HyperparameterExtractor(LLMExtractor):
     def build_prompt(self, doc: StructuredDocument, sections: list[Section]) -> str:
         return render("extract_hyperparameter.md", sections=render_sections(doc, sections))
 
-    def normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def normalize_payload(self, payload: dict[str, Any], doc: StructuredDocument) -> dict[str, Any]:
         """Canonicalize names and shapes. Never fills in a missing value."""
         name = str(payload.get("canonical_name", "")).strip().lower()
         name = name.replace(" ", "_").replace("-", "_")

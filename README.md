@@ -59,7 +59,8 @@ Pre-alpha, under active construction. Building the minimal viable architecture f
 - [x] Spec builder + provenance closure gate
 - [x] CLI wiring for the full pipeline
 - [x] Gap check (`missing_but_critical`) — static checklist pass
-- [ ] Remaining extractors: equation, algorithm
+- [x] Remaining extractors: equation, algorithm
+- [x] Symbol closure check
 
 **The MVA acceptance criterion now passes.** Given three papers with one hand-planted conflicting hyperparameter, the pipeline emits a spec that (a) contains that conflict in `open_conflicts` with both positions and full provenance, and (b) contains no fabricated conflicts — the two values stated under *different* conditions are correctly left alone.
 

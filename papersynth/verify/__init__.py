@@ -20,6 +20,7 @@ from papersynth.core.models import Claim, ClaimSet
 from papersynth.llm.base import LLMProvider
 from papersynth.verify.citation_trace import TraceResult, check_numeric_literal, trace
 from papersynth.verify.range_check import CheckOutcome, RangeRules
+from papersynth.verify.symbol_check import symbol_check
 
 __all__ = [
     "CheckOutcome",
@@ -28,6 +29,7 @@ __all__ = [
     "VerificationReport",
     "Verifier",
     "check_numeric_literal",
+    "symbol_check",
     "trace",
 ]
 
@@ -91,11 +93,19 @@ class Verifier:
     ) -> Claim:
         trace_result = trace(claim, doc, provider=self.provider if self.entailment else None)
         range_result = self.range_rules.check(claim)
+        symbol_result = symbol_check(claim)
 
         claim.verification.citation_trace = trace_result.outcome.result
         claim.verification.range_check = range_result.result
+        claim.verification.symbol_check = symbol_result.result
         claim.verification.notes = [
-            note for note in (trace_result.outcome.reason, range_result.reason) if note
+            note
+            for note in (
+                trace_result.outcome.reason,
+                range_result.reason,
+                symbol_result.reason,
+            )
+            if note
         ]
 
         if trace_result.outcome.failed:
@@ -106,6 +116,11 @@ class Verifier:
         if range_result.failed:
             claim.status = "rejected"
             report.record_rejection("range_check", range_result.reason)
+            return claim
+
+        if symbol_result.failed:
+            claim.status = "rejected"
+            report.record_rejection("symbol_check", symbol_result.reason)
             return claim
 
         if trace_result.numeric_literal.result == "warn":

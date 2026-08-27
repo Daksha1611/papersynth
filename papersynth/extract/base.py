@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from papersynth.core import ids
-from papersynth.core.document import Section, StructuredDocument
+from papersynth.core.document import Section, Span, StructuredDocument
 from papersynth.core.models import Claim, ClaimType, Provenance
 from papersynth.llm.base import LLMProvider
 from papersynth.schemas import validate
@@ -98,9 +98,34 @@ class LLMExtractor(ABC):
     def build_prompt(self, doc: StructuredDocument, sections: list[Section]) -> str:
         """Render the extraction prompt for these sections."""
 
-    def normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Last chance to canonicalize before validation. Must not invent values."""
+    def normalize_payload(self, payload: dict[str, Any], doc: StructuredDocument) -> dict[str, Any]:
+        """Canonicalize before validation. Must not invent values.
+
+        Receives the document because some normalization is only decidable
+        against it - resolving a symbol's claimed definition to a real span,
+        for instance, where a definition the model cannot point to does not
+        count as one.
+        """
         return payload
+
+    def anchor(
+        self,
+        item: dict[str, Any],
+        quote: str | None,
+        doc: StructuredDocument,
+        section_indices: list[int],
+    ) -> Span | None:
+        """Resolve this candidate to a span in the document.
+
+        The default asks the model for a verbatim quote and locates it, which
+        is right whenever the claim comes out of prose. Extractors whose source
+        object already has a known position in the document - an equation, an
+        algorithm block - override this and anchor deterministically instead,
+        so no model quote is involved in their provenance at all.
+        """
+        if not isinstance(quote, str) or not quote.strip():
+            return None
+        return doc.find_span(quote, section_filter=section_indices) or doc.find_span(quote)
 
     # -- protocol ----------------------------------------------------------
 
@@ -182,21 +207,21 @@ class LLMExtractor(ABC):
         data = dict(item)
         quote = data.pop("quote", None)
         payload = self.normalize_payload(
-            {k: v for k, v in data.items() if v is not None or k in _NULLABLE}
+            {k: v for k, v in data.items() if v is not None or k in _NULLABLE}, doc
         )
 
-        if not isinstance(quote, str) or not quote.strip():
-            result.rejected.append(
-                RejectedClaim("no supporting quote supplied", payload, quote=None)
-            )
-            return
-
-        span = doc.find_span(quote, section_filter=section_indices) or doc.find_span(quote)
+        span = self.anchor(data, quote if isinstance(quote, str) else None, doc, section_indices)
         if span is None:
-            # The model quoted text that is not in the paper. That is either a
-            # fabrication or a paraphrase; either way the claim is unsupported.
+            # Either the model supplied no quote, or it quoted text that is not
+            # in the paper - a fabrication or a paraphrase. Either way the
+            # claim is unsupported and is rejected rather than downgraded.
+            reason = (
+                "no supporting quote supplied"
+                if not isinstance(quote, str) or not quote.strip()
+                else "quote does not appear in the document"
+            )
             result.rejected.append(
-                RejectedClaim("quote does not appear in the document", payload, quote=quote)
+                RejectedClaim(reason, payload, quote=quote if isinstance(quote, str) else None)
             )
             return
 
