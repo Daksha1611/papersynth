@@ -1,0 +1,120 @@
+# Plausibility rules for extracted hyperparameters (section 8.3.3).
+#
+# A hard_range violation is almost always an extraction error rather than a
+# paper error - a decimal point lost to OCR, a value read from the wrong table
+# column. Those are REJECTED. A soft_range violation is unusual but legitimate
+# often enough that rejecting it would lose real claims, so it WARNS and the
+# claim survives with a note.
+#
+# Extend this file rather than the checker; no code change is needed to add a
+# rule (NFR-07).
+
+version: "1.0.0"
+
+rules:
+  - canonical_name: dropout
+    type: float
+    hard_range: [0.0, 1.0]      # a probability cannot leave this range
+    soft_range: [0.0, 0.6]
+
+  - canonical_name: learning_rate
+    type: float
+    hard_range: [1.0e-10, 1.0]
+    soft_range: [1.0e-6, 0.1]
+    must_be_positive: true
+
+  - canonical_name: batch_size
+    type: int
+    hard_range: [1, 1048576]
+    soft_range: [1, 16384]
+    must_be_positive: true
+
+  - canonical_name: num_layers
+    type: int
+    hard_range: [1, 1024]
+    soft_range: [1, 128]
+    must_be_positive: true
+
+  - canonical_name: num_heads
+    type: int
+    hard_range: [1, 1024]
+    soft_range: [1, 128]
+    must_be_positive: true
+
+  - canonical_name: hidden_dim
+    type: int
+    hard_range: [1, 1048576]
+    soft_range: [8, 65536]
+    must_be_positive: true
+
+  - canonical_name: embed_dim
+    type: int
+    hard_range: [1, 1048576]
+    soft_range: [8, 65536]
+    must_be_positive: true
+
+  - canonical_name: weight_decay
+    type: float
+    hard_range: [0.0, 10.0]
+    soft_range: [0.0, 1.0]
+
+  - canonical_name: momentum
+    type: float
+    hard_range: [0.0, 1.0]
+    soft_range: [0.5, 0.999]
+
+  - canonical_name: temperature
+    type: float
+    hard_range: [1.0e-6, 1000.0]
+    soft_range: [0.01, 10.0]
+    must_be_positive: true
+
+  - canonical_name: label_smoothing
+    type: float
+    hard_range: [0.0, 1.0]
+    soft_range: [0.0, 0.3]
+
+  - canonical_name: gradient_clip
+    type: float
+    hard_range: [0.0, 1000.0]
+    soft_range: [0.1, 10.0]
+
+  - canonical_name: warmup_steps
+    type: int
+    hard_range: [0, 10000000]
+    soft_range: [0, 100000]
+
+  - canonical_name: num_epochs
+    type: int
+    hard_range: [1, 100000]
+    soft_range: [1, 1000]
+    must_be_positive: true
+
+  - canonical_name: num_steps
+    type: int
+    hard_range: [1, 1000000000]
+    soft_range: [1, 10000000]
+    must_be_positive: true
+
+  - canonical_name: beam_size
+    type: int
+    hard_range: [1, 1000]
+    soft_range: [1, 50]
+    must_be_positive: true
+
+  - canonical_name: sequence_length
+    type: int
+    hard_range: [1, 100000000]
+    soft_range: [8, 1048576]
+    must_be_positive: true
+
+  - canonical_name: vocab_size
+    type: int
+    hard_range: [1, 100000000]
+    soft_range: [100, 1000000]
+    must_be_positive: true
+
+  - canonical_name: top_p
+    type: float
+    hard_range: [0.0, 1.0]
+    soft_range: [0.1, 1.0]

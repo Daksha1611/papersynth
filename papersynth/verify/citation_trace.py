@@ -1,0 +1,228 @@
+"""Citation tracing (section 8.3.1, 10.1).
+
+Four checks, cheapest first, so an obviously-broken claim never reaches an LLM:
+
+  1. the span resolves at all
+  2. the stored quote hash still matches the document's text
+  3. a numeric value literally appears in the cited span
+  4. the span actually entails the payload (adversarial LLM judge)
+
+Checks 1 and 2 nearly always pass for a freshly extracted claim, because the
+span was derived from the model's own quote. Their real work is on
+re-verification: a claim loaded from a previous run against a re-ingested
+document, where a changed parser or a different PDF would otherwise let stale
+provenance pass unnoticed.
+
+Check 3 is where deterministic value is concentrated. A model that quotes
+"learning rate of 0.0001" and reports 0.001 is caught here with no call spent,
+and that transcription slip is the single most common extraction error.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from papersynth.core import ids
+from papersynth.core.document import StructuredDocument
+from papersynth.core.models import Claim
+from papersynth.llm.base import LLMProvider
+from papersynth.verify.range_check import CheckOutcome
+
+TRACER_SYSTEM = (
+    "You are an adversarial fact-checker. Your job is to find reasons a quoted "
+    "passage does NOT support a claim. You are not trying to be agreeable. If "
+    "the passage only partially supports the claim, that is not support."
+)
+
+#: Numbers in prose: 0.0001, 1e-4, 1.2 x 10^-4, 100,000, 64.
+_NUMBER = re.compile(
+    r"(?<![\w.])"
+    r"(?P<num>\d[\d,]*\.?\d*(?:\s*[eE]\s*[-+]?\d+)?"
+    r"|\.\d+(?:\s*[eE]\s*[-+]?\d+)?)"
+    r"(?![\w])"
+)
+# The caret is optional and must not swallow the exponent's sign - treating
+# "^-" as one marker turns 1.2 x 10^-4 into 1.2 x 10^4.
+_SCIENTIFIC = re.compile(r"(?P<mant>\d+\.?\d*)\s*(?:x|×|\*)\s*10\s*\^?\s*(?P<exp>[-−+]?\d+)")
+
+
+@dataclass
+class TraceResult:
+    span_resolves: CheckOutcome
+    quote_hash: CheckOutcome
+    numeric_literal: CheckOutcome
+    entailment: CheckOutcome
+
+    @property
+    def outcome(self) -> CheckOutcome:
+        """Collapse to a single verdict. Any hard failure fails the trace."""
+        for check in (self.span_resolves, self.quote_hash, self.numeric_literal, self.entailment):
+            if check.result == "fail":
+                return check
+        if any(
+            c.result == "warn" for c in (self.numeric_literal, self.entailment, self.quote_hash)
+        ):
+            reasons = "; ".join(
+                c.reason
+                for c in (self.quote_hash, self.numeric_literal, self.entailment)
+                if c.result == "warn"
+            )
+            return CheckOutcome("warn", reasons)
+        return CheckOutcome("pass")
+
+
+def trace(
+    claim: Claim,
+    doc: StructuredDocument,
+    *,
+    provider: LLMProvider | None = None,
+) -> TraceResult:
+    """Run the trace. Entailment is skipped when no provider is supplied."""
+    span = doc.resolve_span(claim.provenance.span_id, char_end=claim.provenance.char_end)
+
+    if span is None:
+        unresolvable = CheckOutcome(
+            "fail", f"span {claim.provenance.span_id} does not resolve in {doc.paper_id}"
+        )
+        return TraceResult(
+            unresolvable, CheckOutcome("n/a"), CheckOutcome("n/a"), CheckOutcome("n/a")
+        )
+
+    hash_check = (
+        CheckOutcome("pass")
+        if ids.quote_hash(span.text) == claim.provenance.quote_hash
+        else CheckOutcome(
+            "fail",
+            "source text at this span no longer matches the recorded hash; "
+            "the document changed or the span misaligned",
+        )
+    )
+    if hash_check.failed:
+        return TraceResult(
+            CheckOutcome("pass"), hash_check, CheckOutcome("n/a"), CheckOutcome("n/a")
+        )
+
+    numeric = check_numeric_literal(claim, span.text)
+
+    entailment = CheckOutcome("n/a", "no provider supplied")
+    if provider is not None:
+        entailment = check_entailment(claim, span.text, provider)
+
+    return TraceResult(CheckOutcome("pass"), hash_check, numeric, entailment)
+
+
+def check_numeric_literal(claim: Claim, span_text: str) -> CheckOutcome:
+    """Does the claimed number actually appear in the cited text?
+
+    Deterministic and free. Comparison is on numeric value rather than on
+    string form, so 1e-4, 0.0001, and 1 x 10^-4 all match a claimed 0.0001 -
+    papers write the same quantity many ways, and a string comparison would
+    reject correct claims constantly.
+    """
+    value = claim.payload.get("value")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return CheckOutcome("n/a")
+
+    for candidate in _numbers_in(span_text):
+        if _close(candidate, float(value)):
+            return CheckOutcome("pass")
+
+    return CheckOutcome(
+        "warn",
+        f"value {value} does not appear literally in the cited span; "
+        "it may have been inferred, converted, or mis-transcribed",
+    )
+
+
+def check_entailment(claim: Claim, span_text: str, provider: LLMProvider) -> CheckOutcome:
+    """Adversarial judge: does this passage support this claim?
+
+    Prompted to look for reasons the passage does NOT support the claim, and
+    ties resolve as failure. A judge asked "does this support it?" agrees far
+    too readily, which would make the check decorative.
+    """
+    prompt = (
+        "PASSAGE FROM THE PAPER:\n"
+        f"{span_text}\n\n"
+        "CLAIM EXTRACTED FROM THAT PASSAGE:\n"
+        f"{_render_claim(claim)}\n\n"
+        "Does the passage state or directly support this claim?\n"
+        "Look for reasons it does not: a different value, a different scope or "
+        "condition, a different quantity with a similar name, or a claim that "
+        "goes beyond what the passage says.\n"
+        'Answer JSON: {"entailed": true|false, "reason": "<one sentence>"}'
+    )
+    schema = {
+        "type": "object",
+        "properties": {"entailed": {"type": "boolean"}, "reason": {"type": "string"}},
+        "required": ["entailed", "reason"],
+    }
+
+    kwargs: dict[str, Any] = {"schema": schema, "temperature": 0.0, "system": TRACER_SYSTEM}
+    if hasattr(provider, "chain"):
+        kwargs |= {
+            "stage": "verify",
+            "paper_id": claim.paper_id,
+            "extractor": "tracer@1.0.0",
+            "template_id": "tracer@1.0.0",
+        }
+
+    completion = provider.complete(prompt, **kwargs)
+    verdict = completion.parsed if isinstance(completion.parsed, dict) else {}
+
+    # An unreadable verdict must not silently pass. Ties resolve as FAIL.
+    if "entailed" not in verdict:
+        return CheckOutcome("fail", "tracer returned no verdict; treated as unsupported")
+
+    if verdict.get("entailed") is True:
+        return CheckOutcome("pass")
+
+    reason = str(verdict.get("reason", "")).strip() or "tracer found the span unsupportive"
+    return CheckOutcome("fail", reason)
+
+
+def _render_claim(claim: Claim) -> str:
+    payload = claim.payload
+    if claim.type == "hyperparameter":
+        parts = [f"{payload.get('canonical_name')} = {payload.get('value')!r}"]
+        if payload.get("unit"):
+            parts.append(f"unit: {payload['unit']}")
+        if payload.get("condition"):
+            parts.append(f"condition: {payload['condition']}")
+        if payload.get("applies_to") and payload["applies_to"] != "global":
+            parts.append(f"applies to: {payload['applies_to']}")
+        return "\n".join(parts)
+    return "\n".join(f"{k}: {v}" for k, v in payload.items() if v is not None)
+
+
+def _numbers_in(text: str) -> list[float]:
+    """Every number in the text, including 1.2 x 10^-4 forms."""
+    found: list[float] = []
+
+    for match in _SCIENTIFIC.finditer(text):
+        try:
+            exponent = match.group("exp").replace("−", "-")
+            found.append(float(match.group("mant")) * (10 ** int(exponent)))
+        except (ValueError, OverflowError):
+            continue
+
+    for match in _NUMBER.finditer(text):
+        raw = match.group("num").replace(",", "").replace(" ", "")
+        try:
+            found.append(float(raw))
+        except (ValueError, OverflowError):
+            continue
+
+    return found
+
+
+def _close(a: float, b: float) -> bool:
+    """Equality with tolerance for how the value was written down."""
+    if a == b:
+        return True
+    scale = max(abs(a), abs(b))
+    if scale == 0:
+        return True
+    return abs(a - b) / scale < 1e-6

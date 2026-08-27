@@ -83,6 +83,10 @@ ignore = ["B008", "RUF012"]
 "papersynth/ingest/pdf.py" = ["RUF001"]
 # Normalizes a Unicode minus sign into ASCII; it must contain the character.
 "papersynth/extract/extractors/hyperparameter.py" = ["RUF001"]
+# Parses the multiplication and minus signs papers actually print in "1.2 x 10^-4".
+"papersynth/verify/citation_trace.py" = ["RUF001"]
+# Exercises those same printed signs against the parser.
+"tests/unit/test_verify.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.11"
