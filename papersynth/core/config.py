@@ -44,7 +44,12 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-120b"
     groq_rpd_limit: int = 1000
 
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-2.5-flash was the documented default and is now refused for new
+    # accounts. Pinned rather than using the floating `gemini-flash-latest`
+    # alias: a model that changes underneath a run would break the guarantee
+    # that identical inputs produce identical specs (NFR-02). Check staleness
+    # with `papersynth models --provider gemini`.
+    gemini_model: str = "gemini-3.6-flash"
     gemini_rpd_limit: int = 1500
 
     openrouter_free_model: str = "meta-llama/llama-3.3-70b-instruct:free"

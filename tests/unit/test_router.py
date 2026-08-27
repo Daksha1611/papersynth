@@ -30,6 +30,8 @@ SCHEMA = {"type": "object", "properties": {"value": {"type": "number"}}}
 
 
 def make_router(chain, **kwargs):
+    # No real waiting in tests; the retry path is still exercised.
+    kwargs.setdefault("sleep", lambda _seconds: None)
     kwargs.setdefault("usage", UsageTracker(persist=False))
     kwargs.setdefault("ledger", Ledger())
     kwargs.setdefault("cache", PromptCache(None, enabled=False))

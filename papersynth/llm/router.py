@@ -16,6 +16,7 @@ Nothing in the default chain can spend money; every leg is free tier.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 
 from papersynth.core import ids
@@ -62,6 +63,7 @@ class FallbackRouter:
         usage: UsageTracker | None = None,
         ledger: Ledger | None = None,
         cache: PromptCache | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not chain:
             raise ProviderError(
@@ -73,6 +75,9 @@ class FallbackRouter:
         self.usage = usage or UsageTracker()
         self.ledger = ledger or Ledger()
         self.cache = cache or PromptCache(None, enabled=False)
+        #: Injectable so tests exercise the retry path without waiting out a
+        #: real backoff. A suite that sleeps stops being run.
+        self._sleep = sleep
 
     @property
     def model(self) -> str:
@@ -184,12 +189,12 @@ class FallbackRouter:
                 wait = exc.retry_after
                 if wait is None or wait > MAX_BACKOFF_S or attempt == MAX_ATTEMPTS - 1:
                     raise
-                time.sleep(min(wait + 0.5, MAX_BACKOFF_S))
+                self._sleep(min(wait + 0.5, MAX_BACKOFF_S))
             except CapacityError as exc:
                 last = exc
                 if attempt == MAX_ATTEMPTS - 1:
                     raise
-                time.sleep(min(2.0**attempt, MAX_BACKOFF_S))
+                self._sleep(min(2.0**attempt, MAX_BACKOFF_S))
         raise last if last else CapacityError(f"{provider.provider_id} did not respond")
 
     def _record(

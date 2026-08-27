@@ -564,7 +564,9 @@ def show_schema(name: Annotated[str, typer.Argument(help="e.g. spec.schema.json"
 
 @app.command()
 def models(
-    provider: Annotated[str, typer.Option("--provider", help="groq | openrouter | vllm")] = "groq",
+    provider: Annotated[
+        str, typer.Option("--provider", help="groq | gemini | openrouter | vllm")
+    ] = "groq",
 ) -> None:
     """List the models a provider currently serves.
 
@@ -573,27 +575,39 @@ def models(
     turns "check the provider's catalogue" from advice into one command.
     """
     settings = get_settings()
-    base = {
-        "groq": "https://api.groq.com/openai/v1",
-        "openrouter": "https://openrouter.ai/api/v1",
-        "vllm": settings.vllm_url,
-    }.get(provider)
-    if base is None:
-        err.print(f"[red]Unknown provider {provider!r}.[/red]")
-        raise typer.Exit(2)
-
     key = settings.api_key(provider)
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
+
+    if provider == "gemini":
+        url = "https://generativelanguage.googleapis.com/v1beta/models"
+        headers = {"x-goog-api-key": key} if key else {}
+    else:
+        base = {
+            "groq": "https://api.groq.com/openai/v1",
+            "openrouter": "https://openrouter.ai/api/v1",
+            "vllm": settings.vllm_url,
+        }.get(provider)
+        if base is None:
+            err.print(f"[red]Unknown provider {provider!r}.[/red]")
+            raise typer.Exit(2)
+        url = f"{base}/models"
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
 
     try:
-        response = httpx.get(f"{base}/models", headers=headers, timeout=30.0)
+        response = httpx.get(url, headers=headers, timeout=30.0)
         response.raise_for_status()
         payload = response.json()
     except httpx.HTTPError as exc:
         err.print(f"[red]Cannot reach {provider}: {exc}[/red]")
         raise typer.Exit(1) from exc
 
-    ids = sorted(entry.get("id", "?") for entry in payload.get("data") or [])
+    if provider == "gemini":
+        ids = sorted(
+            entry["name"].removeprefix("models/")
+            for entry in payload.get("models") or []
+            if "generateContent" in entry.get("supportedGenerationMethods", [])
+        )
+    else:
+        ids = sorted(entry.get("id", "?") for entry in payload.get("data") or [])
     configured = settings.model_for(provider)
 
     table = Table(title=f"{provider} models ({len(ids)})")
