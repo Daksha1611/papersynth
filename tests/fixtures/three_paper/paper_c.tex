@@ -1,0 +1,16 @@
+\documentclass{article}
+\title{Scaling the Sequence Encoder}
+\date{2024}
+\begin{document}
+\begin{abstract}
+We study how the encoder behaves at larger scale.
+\end{abstract}
+
+\section{Setup}
+We report two configurations. For the base model we use a learning rate of
+0.0001, matching earlier work. For the large model we use a learning rate of
+0.00005 instead, since the larger stack is less stable.
+
+We keep a dropout rate of 0.1 for the base model throughout.
+
+\end{document}

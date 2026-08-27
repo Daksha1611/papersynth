@@ -120,11 +120,11 @@ class ValueConflictDetector:
 def _group_by_condition(claims: list[Claim]) -> dict[str, list[Claim]]:
     grouped: dict[str, list[Claim]] = defaultdict(list)
     for claim in claims:
-        grouped[_normalize_condition(claim.payload.get("condition"))].append(claim)
+        grouped[normalize_condition(claim.payload.get("condition"))].append(claim)
     return grouped
 
 
-def _normalize_condition(condition: object) -> str:
+def normalize_condition(condition: object) -> str:
     if not isinstance(condition, str):
         return ""
     return " ".join(condition.lower().split()).strip(" .,;")

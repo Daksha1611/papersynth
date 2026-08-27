@@ -1,0 +1,17 @@
+\documentclass{article}
+\title{Improved Sequence Encoder}
+\date{2021}
+\begin{document}
+\begin{abstract}
+We revisit the baseline encoder and improve its optimization schedule.
+\end{abstract}
+
+\section{Method}
+We keep the layer structure of the baseline unchanged, using 6 layers.
+
+\section{Experiments}
+We train with a learning rate of 0.0003 for the base model, which we find
+converges faster than prior work. We keep a dropout rate of 0.1 to remain
+comparable. Our runs use a batch size of 256 sequences.
+
+\end{document}

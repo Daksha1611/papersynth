@@ -1,0 +1,18 @@
+\documentclass{article}
+\title{Baseline Sequence Encoder}
+\date{2017}
+\begin{document}
+\begin{abstract}
+We present a baseline encoder for sequence transduction tasks.
+\end{abstract}
+
+\section{Model}
+The encoder stacks identical layers, each with self-attention and a
+feed-forward network. We use 6 layers throughout.
+
+\section{Training Setup}
+We train with the Adam optimizer using a learning rate of 0.0001 for the base
+model. We apply a dropout rate of 0.1 to the output of each sub-layer. Training
+uses a batch size of 128 sequences.
+
+\end{document}

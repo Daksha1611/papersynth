@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 from papersynth.contradict.detectors.value_conflict import (
     ValueConflictDetector,
     attach_paper_support,
+    normalize_condition,
 )
 from papersynth.contradict.severity import specificity, value_conflict_severity
 from papersynth.core.models import ConceptCluster, ConceptGraph, Contradiction
@@ -22,6 +23,7 @@ __all__ = [
     "ValueConflictDetector",
     "attach_paper_support",
     "detect",
+    "normalize_condition",
     "register_detector",
     "specificity",
     "value_conflict_severity",

@@ -50,14 +50,20 @@ Pre-alpha, under active construction. Building the minimal viable architecture f
 
 - [x] Schemas, contracts, and validator
 - [x] Span addressing with lossless round-trip
-- [ ] Ingest (LaTeX + GROBID/PDF)
-- [ ] Hyperparameter extractor
-- [ ] Citation trace + range check
-- [ ] Align + VALUE_CONFLICT detection
-- [ ] Policy engine with ESCALATED fallback
-- [ ] Spec builder + provenance closure gate
+- [x] Ingest (LaTeX + GROBID/PDF + arXiv)
+- [x] LLM layer with free-tier fallback chain
+- [x] Hyperparameter extractor
+- [x] Citation trace + range check
+- [x] Align + VALUE_CONFLICT detection
+- [x] Policy engine with ESCALATED fallback
+- [x] Spec builder + provenance closure gate
+- [ ] CLI wiring for the full pipeline
+- [ ] Gap check (`missing_but_critical`)
+- [ ] Remaining extractors: equation, algorithm
 
-**Acceptance criterion for the MVA:** given three papers with one hand-planted conflicting hyperparameter, the pipeline emits a spec that (a) contains that conflict in `open_conflicts` with both positions and full provenance, and (b) contains no fabricated conflicts. Nothing else needs to work for the core idea to be validated.
+**The MVA acceptance criterion now passes.** Given three papers with one hand-planted conflicting hyperparameter, the pipeline emits a spec that (a) contains that conflict in `open_conflicts` with both positions and full provenance, and (b) contains no fabricated conflicts — the two values stated under *different* conditions are correctly left alone.
+
+See `tests/e2e/test_mva_acceptance.py`. The end-to-end run is deterministic and offline: extraction responses are scripted, so the suite costs nothing and cannot drift.
 
 ## Install
 
