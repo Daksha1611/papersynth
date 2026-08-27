@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     provider_chain: list[ProviderId] = Field(default=["groq", "gemini"])
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
+    # API keys are declared here, with their conventional un-prefixed names, so
+    # that a key written into .env is actually picked up. Reading them through
+    # os.getenv instead would ignore .env entirely and fail with "no providers
+    # configured" while the key sits right there in the file.
+    groq_api_key: str | None = Field(default=None, validation_alias="GROQ_API_KEY")
+    google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
+    openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
+
     groq_model: str = "llama-3.3-70b-versatile"
     groq_rpd_limit: int = 1000
 
@@ -78,6 +86,19 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [part.strip() for part in v.split(",") if part.strip()]
         return v
+
+    def api_key(self, provider_id: str) -> str | None:
+        """The configured key, or None when this leg is simply not set up.
+
+        A missing key is not an error - section 6.4.4 is explicit that an unset
+        OPENROUTER_API_KEY narrows the chain rather than crashing the run.
+        """
+        key = {
+            "groq": self.groq_api_key,
+            "gemini": self.google_api_key,
+            "openrouter": self.openrouter_api_key,
+        }.get(provider_id)
+        return key.strip() or None if key else None
 
     def rpd_limit(self, provider_id: str) -> int | None:
         return {

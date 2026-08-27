@@ -190,16 +190,17 @@ def build_provider(provider_id: str, settings: Settings | None = None) -> LLMPro
     """
     settings = settings or get_settings()
 
+    key = settings.api_key(provider_id)
+
     if provider_id == "groq":
-        key = os.getenv("GROQ_API_KEY")
         return groq_provider(settings, key) if key else None
 
     if provider_id == "gemini":
-        key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        # GEMINI_API_KEY is the older name and still in circulation.
+        key = key or os.getenv("GEMINI_API_KEY")
         return GeminiProvider(settings.gemini_model, key) if key else None
 
     if provider_id == "openrouter":
-        key = os.getenv("OPENROUTER_API_KEY")
         return openrouter_provider(settings, key) if key else None
 
     if provider_id == "vllm":
