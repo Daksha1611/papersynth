@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
     openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
 
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Free-tier model lineups rotate without notice (R-13): llama-3.3-70b-versatile
+    # was the documented default and has since been delisted. Verify with
+    # `papersynth models` rather than assuming this ID is still served.
+    groq_model: str = "openai/gpt-oss-120b"
     groq_rpd_limit: int = 1000
 
     gemini_model: str = "gemini-2.5-flash"

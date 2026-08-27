@@ -127,7 +127,11 @@ class OpenAICompatibleProvider:
 
         detail = response.text[:300]
 
-        if response.status_code == 429:
+        if response.status_code in (429, 413):
+            # 413 reads as "payload too large" but Groq returns it for a
+            # tokens-per-minute rejection, which is a rate limit that clears on
+            # its own. Treating it as terminal made a run give up on a paper
+            # that would have succeeded a minute later.
             raise RateLimitError(self.provider_id, retry_after=_retry_after(response))
 
         if response.status_code == 404:

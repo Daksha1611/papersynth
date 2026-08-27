@@ -44,7 +44,12 @@
             "type": "string",
             "enum": ["latex", "pdf", "pdf_no_grobid", "prepared_json"]
           },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "claims_contributed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Verified claims this paper contributed. Zero means it was ingested but nothing survived extraction or verification - the spec does not reflect it."
+          }
         },
         "required": ["paper_id", "title", "ingest_method", "sha256"],
         "additionalProperties": false
@@ -256,7 +261,13 @@
           "type": "object",
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
-        "provenance_completeness": { "$ref": "common.schema.json#/$defs/confidence" }
+        "provenance_completeness": { "$ref": "common.schema.json#/$defs/confidence" },
+        "papers_ingested": { "type": "integer", "minimum": 0 },
+        "papers_contributing": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Papers that contributed at least one verified claim. Below papers_ingested, the spec is partial and says so."
+        }
       },
       "required": [
         "claims_total",

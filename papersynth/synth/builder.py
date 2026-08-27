@@ -68,7 +68,9 @@ class SpecBuilder:
             "spec_version": papersynth.SPEC_VERSION,
             "run_id": self.run_id,
             "generated_at": utcnow(),
-            "source_papers": [_paper_entry(d) for d in self.documents],
+            "source_papers": [
+                _paper_entry(d, self._contribution(d.paper_id)) for d in self.documents
+            ],
             "objective": self.objective,
             "components": self._components(disputed, superseded, reconciliation),
             "open_conflicts": self._open_conflicts(contradictions, reconciliation),
@@ -331,6 +333,20 @@ class SpecBuilder:
             )
         return out
 
+    def _contribution(self, paper_id: str) -> int:
+        """Verified claims this paper actually put into the spec.
+
+        Listing a paper under source_papers implies the spec synthesizes it. A
+        paper whose extraction failed contributed nothing, and saying so is the
+        difference between a partial spec that admits it and one that quietly
+        claims three sources while reflecting one.
+        """
+        return sum(
+            1
+            for claim in self.claims.values()
+            if claim.paper_id == paper_id and claim.status == "verified"
+        )
+
     def _verification_summary(self, reports: list[VerificationReport]) -> dict[str, Any]:
         reasons: dict[str, int] = defaultdict(int)
         for report in reports:
@@ -349,6 +365,10 @@ class SpecBuilder:
             # Filled in by the validator, which is the component that can
             # actually measure closure across the assembled spec.
             "provenance_completeness": 1.0,
+            "papers_ingested": len(self.documents),
+            "papers_contributing": sum(
+                1 for d in self.documents if self._contribution(d.paper_id) > 0
+            ),
         }
 
 
@@ -357,7 +377,7 @@ class SpecBuilder:
 # ---------------------------------------------------------------------------
 
 
-def _paper_entry(doc: StructuredDocument) -> dict[str, Any]:
+def _paper_entry(doc: StructuredDocument, claims_contributed: int) -> dict[str, Any]:
     return {
         "paper_id": doc.paper_id,
         "title": doc.title,
@@ -365,6 +385,7 @@ def _paper_entry(doc: StructuredDocument) -> dict[str, Any]:
         "year": doc.year,
         "ingest_method": doc.ingest_method,
         "sha256": doc.sha256,
+        "claims_contributed": claims_contributed,
     }
 
 

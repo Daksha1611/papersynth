@@ -25,9 +25,15 @@ from papersynth.core.models import Claim, ClaimType, Provenance
 from papersynth.llm.base import LLMProvider
 from papersynth.schemas import validate
 
-#: Cap on how much text goes into one extraction prompt. Beyond this, recall
-#: drops and cost climbs; `applicable_sections` should have narrowed it first.
-MAX_PROMPT_CHARS = 24_000
+#: Character budget for one extraction prompt.
+#:
+#: Sized against a free tier's per-minute token allowance rather than a model's
+#: context window. Groq's free tier permits 8,000 tokens per minute, and real
+#: paper text runs close to 3 characters per token, so a single 24,000-character
+#: prompt was rejected outright with a 413. Sections are batched under this
+#: budget across several calls instead, which also removes the truncation that
+#: silently cost recall on long papers.
+MAX_PROMPT_CHARS = 9_000
 
 
 @dataclass
@@ -154,21 +160,46 @@ class LLMExtractor(ABC):
             result.warnings.append(f"{self.claim_type}: no sections to read in {doc.paper_id}")
             return result
 
-        prompt = self.build_prompt(doc, sections)
-        if len(prompt) > MAX_PROMPT_CHARS:
-            prompt = prompt[:MAX_PROMPT_CHARS]
-            result.warnings.append(
-                f"{self.claim_type}: prompt truncated to {MAX_PROMPT_CHARS} chars for "
-                f"{doc.paper_id}; recall on later sections may be reduced"
-            )
-
-        completion = self._call(prompt, doc)
-        raw_items = _as_items(completion.parsed)
-
-        section_indices = [s.index for s in sections]
-        for item in raw_items:
-            self._admit(item, doc, section_indices, result)
+        for batch in self.batch_sections(doc, sections):
+            prompt = self.build_prompt(doc, batch)
+            completion = self._call(prompt, doc)
+            section_indices = [s.index for s in batch]
+            for item in _as_items(completion.parsed):
+                self._admit(item, doc, section_indices, result)
         return result
+
+    def batch_sections(
+        self, doc: StructuredDocument, sections: list[Section]
+    ) -> list[list[Section]]:
+        """Split sections into groups that each fit one prompt.
+
+        Batching rather than truncating matters for recall: a paper whose
+        training details sit in an appendix would have had them silently cut
+        off, and the run would have reported a clean extraction that simply
+        never read the relevant page.
+
+        A single section larger than the budget still goes out alone. Splitting
+        mid-section would hand the model a fragment with no context, and a
+        claim extracted from half a sentence is worse than one not extracted.
+        """
+        overhead = len(self.build_prompt(doc, []))
+        budget = max(1_000, MAX_PROMPT_CHARS - overhead)
+
+        batches: list[list[Section]] = []
+        current: list[Section] = []
+        size = 0
+
+        for section in sections:
+            section_size = len(section.text) + len(section.title) + 8
+            if current and size + section_size > budget:
+                batches.append(current)
+                current, size = [], 0
+            current.append(section)
+            size += section_size
+
+        if current:
+            batches.append(current)
+        return batches
 
     # -- internals ---------------------------------------------------------
 

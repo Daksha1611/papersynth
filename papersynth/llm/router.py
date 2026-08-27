@@ -15,6 +15,7 @@ Nothing in the default chain can spend money; every leg is free tier.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from papersynth.core import ids
@@ -34,6 +35,16 @@ from papersynth.llm.usage_tracker import UsageTracker
 
 #: Errors that mean "this provider cannot serve me right now" - try the next.
 _FALL_THROUGH = (RateLimitError, CapacityError)
+
+#: Attempts against one provider before moving on. A per-minute limit clears by
+#: waiting, so giving up on the first 429 would abandon a run over a pause the
+#: provider itself told us the length of (section 15.4).
+MAX_ATTEMPTS = 3
+
+#: Never sleep longer than this in one wait. A daily cap reports a retry-after
+#: measured in hours, and blocking on that is the resumable-run case, not
+#: something to sit through.
+MAX_BACKOFF_S = 60.0
 
 #: Errors that mean "something is genuinely wrong" - stop and surface it.
 _TERMINAL = (SchemaValidationError, ContentPolicyError, ModelNotFoundError)
@@ -103,7 +114,8 @@ class FallbackRouter:
             fallback_from = first_attempted if provider.provider_id != first_attempted else None
 
             try:
-                completion = provider.complete(
+                completion = self._attempt(
+                    provider,
                     prompt,
                     schema=schema,
                     temperature=temperature,
@@ -155,6 +167,30 @@ class FallbackRouter:
                 + ", ".join(skipped or [p.provider_id for p in self.chain])
             )
         )
+
+    def _attempt(self, provider: LLMProvider, prompt: str, **kwargs: Any) -> Completion:
+        """Call one provider, waiting out short rate limits before giving up.
+
+        Only waits when the provider states a retry-after we can afford. A
+        limit that resets tomorrow is not something to block on - that is what
+        falling through, and ultimately pausing the run, is for.
+        """
+        last: Exception | None = None
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                return provider.complete(prompt, **kwargs)
+            except RateLimitError as exc:
+                last = exc
+                wait = exc.retry_after
+                if wait is None or wait > MAX_BACKOFF_S or attempt == MAX_ATTEMPTS - 1:
+                    raise
+                time.sleep(min(wait + 0.5, MAX_BACKOFF_S))
+            except CapacityError as exc:
+                last = exc
+                if attempt == MAX_ATTEMPTS - 1:
+                    raise
+                time.sleep(min(2.0**attempt, MAX_BACKOFF_S))
+        raise last if last else CapacityError(f"{provider.provider_id} did not respond")
 
     def _record(
         self,

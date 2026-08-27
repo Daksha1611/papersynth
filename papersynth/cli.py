@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Annotated, Any, cast, get_args
 
+import httpx
 import typer
 import yaml
 from rich.console import Console
@@ -206,6 +207,19 @@ def _print_run_summary(result: Any, root: Path) -> None:
 
     for warning in result.warnings[:5]:
         console.print(f"[yellow]warning:[/yellow] {warning}")
+
+    summary = (result.spec or {}).get("verification_summary", {})
+    ingested = summary.get("papers_ingested", 0)
+    contributing = summary.get("papers_contributing", 0)
+    if ingested and contributing < ingested:
+        # "0 contradictions" reads as "the papers agree" when it can equally
+        # mean "only one paper was read". The distinction has to be loud.
+        console.print(
+            f"\n[bold yellow]PARTIAL[/bold yellow] - only {contributing} of {ingested} "
+            "papers contributed claims. Cross-paper reconciliation did not happen "
+            "for the rest, so the conflict count above is not a finding about the "
+            "corpus you asked for."
+        )
 
     if result.blocking:
         console.print(
@@ -546,6 +560,54 @@ def show_schema(name: Annotated[str, typer.Argument(help="e.g. spec.schema.json"
     except FileNotFoundError as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
+
+
+@app.command()
+def models(
+    provider: Annotated[str, typer.Option("--provider", help="groq | openrouter | vllm")] = "groq",
+) -> None:
+    """List the models a provider currently serves.
+
+    Free-tier lineups rotate without notice - the documented default for Groq
+    was delisted between this project being designed and first run (R-13). This
+    turns "check the provider's catalogue" from advice into one command.
+    """
+    settings = get_settings()
+    base = {
+        "groq": "https://api.groq.com/openai/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+        "vllm": settings.vllm_url,
+    }.get(provider)
+    if base is None:
+        err.print(f"[red]Unknown provider {provider!r}.[/red]")
+        raise typer.Exit(2)
+
+    key = settings.api_key(provider)
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+
+    try:
+        response = httpx.get(f"{base}/models", headers=headers, timeout=30.0)
+        response.raise_for_status()
+        payload = response.json()
+    except httpx.HTTPError as exc:
+        err.print(f"[red]Cannot reach {provider}: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    ids = sorted(entry.get("id", "?") for entry in payload.get("data") or [])
+    configured = settings.model_for(provider)
+
+    table = Table(title=f"{provider} models ({len(ids)})")
+    table.add_column("model", style="cyan")
+    table.add_column("")
+    for model_id in ids:
+        table.add_row(model_id, "[green]<- configured[/green]" if model_id == configured else "")
+    console.print(table)
+
+    if configured not in ids:
+        err.print(
+            f"[yellow]The configured model {configured!r} is not in this list. "
+            "A run would fail with model-not-found.[/yellow]"
+        )
 
 
 @app.command()
