@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/spec.schema.json",
+  "title": "implementation_spec",
+  "description": "The deliverable. Versioned public contract consumed by downstream coding agents (DD-06).",
+  "type": "object",
+  "$defs": {
+    "provenance_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "common.schema.json#/$defs/claim_id" }
+    },
+    "port": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "shape": { "type": ["string", "null"] },
+        "type": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "spec_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+
+    "source_papers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "paper_id": { "$ref": "common.schema.json#/$defs/paper_id" },
+          "title": { "type": "string" },
+          "venue": { "type": ["string", "null"] },
+          "year": { "type": ["integer", "null"] },
+          "ingest_method": {
+            "type": "string",
+            "enum": ["latex", "pdf", "pdf_no_grobid", "prepared_json"]
+          },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "required": ["paper_id", "title", "ingest_method", "sha256"],
+        "additionalProperties": false
+      }
+    },
+
+    "objective": { "type": "string", "minLength": 1 },
+
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "component_id": { "type": "string", "pattern": "^cmp_[a-z0-9_]+$" },
+          "name": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^cmp_[a-z0-9_]+$" },
+            "description": "Must form a DAG; enforced by SpecValidator."
+          },
+          "algorithms": { "type": "array", "items": { "type": "object" } },
+          "equations": { "type": "array", "items": { "type": "object" } },
+          "hyperparameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "canonical_name": { "type": "string" },
+                "value": { "type": ["number", "string", "boolean"] },
+                "unit": { "type": ["string", "null"] },
+                "condition": { "type": ["string", "null"] },
+                "resolved_from": { "type": ["string", "null"] },
+                "resolution": { "type": ["object", "null"] },
+                "provenance_refs": { "$ref": "#/$defs/provenance_refs" }
+              },
+              "required": ["canonical_name", "value", "provenance_refs"],
+              "additionalProperties": false
+            }
+          },
+          "interfaces": {
+            "type": "object",
+            "properties": {
+              "inputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
+              "outputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
+              "invariants": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["inputs", "outputs", "invariants"],
+            "additionalProperties": false
+          },
+          "provenance_refs": { "$ref": "#/$defs/provenance_refs" }
+        },
+        "required": [
+          "component_id",
+          "name",
+          "role",
+          "depends_on",
+          "interfaces",
+          "provenance_refs"
+        ],
+        "additionalProperties": false
+      }
+    },
+
+    "datasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "split": { "type": ["string", "null"] },
+          "preprocessing": { "type": "array", "items": { "type": "string" } },
+          "source_url": { "type": ["string", "null"] },
+          "provenance_refs": { "$ref": "#/$defs/provenance_refs" }
+        },
+        "required": ["name", "provenance_refs"],
+        "additionalProperties": false
+      }
+    },
+
+    "expected_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "metric": { "type": "string" },
+          "value": { "type": "number" },
+          "tolerance": { "type": ["number", "null"] },
+          "dataset": { "type": ["string", "null"] },
+          "split": { "type": ["string", "null"] },
+          "provenance_refs": { "$ref": "#/$defs/provenance_refs" }
+        },
+        "required": ["metric", "value", "provenance_refs"],
+        "additionalProperties": false
+      }
+    },
+
+    "open_conflicts": {
+      "type": "array",
+      "description": "Unresolved MATERIAL contradictions. BLOCKING can never appear here (SpecBuilder gate).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "contradiction_id": { "type": "string", "pattern": "^ctr_[0-9a-z_]+$" },
+          "type": { "$ref": "contradiction.schema.json#/$defs/conflict_type" },
+          "severity": { "type": "string", "enum": ["MATERIAL"] },
+          "summary": { "type": "string", "minLength": 1 },
+          "positions": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "properties": {
+                "claim_id": { "$ref": "common.schema.json#/$defs/claim_id" },
+                "paper_id": { "$ref": "common.schema.json#/$defs/paper_id" },
+                "position": { "type": "string" },
+                "provenance": { "type": "object" }
+              },
+              "required": ["claim_id", "paper_id", "position"],
+              "additionalProperties": false
+            }
+          },
+          "guidance": { "type": "string" }
+        },
+        "required": ["contradiction_id", "type", "severity", "summary", "positions"],
+        "additionalProperties": false
+      }
+    },
+
+    "resolved_conflicts": {
+      "type": "array",
+      "description": "Audit trail: what was auto-resolved or human-resolved, and why.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "resolution_id": { "type": "string", "pattern": "^res_[0-9a-z_]+$" },
+          "contradiction_id": { "type": "string", "pattern": "^ctr_[0-9a-z_]+$" },
+          "outcome": {
+            "type": "string",
+            "enum": ["SELECTED", "SCOPED", "MERGED", "ESCALATED", "DEFERRED"]
+          },
+          "selected_claim_id": {
+            "anyOf": [
+              { "$ref": "common.schema.json#/$defs/claim_id" },
+              { "type": "null" }
+            ]
+          },
+          "rule_fired": { "type": ["string", "null"] },
+          "rationale": { "type": "string" },
+          "resolved_by": { "type": "string", "enum": ["policy", "human"] },
+          "resolved_at": { "type": "string", "format": "date-time" },
+          "human_note": { "type": ["string", "null"] }
+        },
+        "required": [
+          "resolution_id",
+          "contradiction_id",
+          "outcome",
+          "rule_fired",
+          "resolved_by",
+          "resolved_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+
+    "missing_but_critical": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "gap_id": { "type": "string", "pattern": "^gap_[0-9a-z_]+$" },
+          "component_id": { "type": ["string", "null"] },
+          "field": { "type": "string", "minLength": 1 },
+          "question": { "type": "string", "minLength": 1 },
+          "criticality": { "$ref": "common.schema.json#/$defs/criticality" },
+          "searched_papers": {
+            "type": "array",
+            "items": { "$ref": "common.schema.json#/$defs/paper_id" }
+          },
+          "suggested_sources": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["gap_id", "field", "question", "criticality", "searched_papers"],
+        "additionalProperties": false
+      }
+    },
+
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "statement": { "type": "string", "minLength": 1 },
+          "explicit": { "type": "boolean" },
+          "criticality": { "$ref": "common.schema.json#/$defs/criticality" },
+          "provenance_refs": { "$ref": "#/$defs/provenance_refs" }
+        },
+        "required": ["statement", "explicit", "criticality", "provenance_refs"],
+        "additionalProperties": false
+      }
+    },
+
+    "verification_summary": {
+      "type": "object",
+      "properties": {
+        "claims_total": { "type": "integer", "minimum": 0 },
+        "verified": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 },
+        "rejection_reasons": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "provenance_completeness": { "$ref": "common.schema.json#/$defs/confidence" }
+      },
+      "required": [
+        "claims_total",
+        "verified",
+        "rejected",
+        "rejection_reasons",
+        "provenance_completeness"
+      ],
+      "additionalProperties": false
+    },
+
+    "review": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["draft", "approved"] },
+        "reviewer": { "type": ["string", "null"] },
+        "approved_at": { "type": ["string", "null"], "format": "date-time" },
+        "notes": { "type": ["string", "null"] }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "spec_version",
+    "run_id",
+    "generated_at",
+    "source_papers",
+    "objective",
+    "components",
+    "open_conflicts",
+    "resolved_conflicts",
+    "missing_but_critical",
+    "assumptions",
+    "verification_summary",
+    "review"
+  ],
+  "additionalProperties": false
+}

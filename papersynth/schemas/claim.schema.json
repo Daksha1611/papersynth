@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/claim.schema.json",
+  "title": "Claim",
+  "type": "object",
+  "properties": {
+    "claim_id": { "$ref": "common.schema.json#/$defs/claim_id" },
+    "paper_id": { "$ref": "common.schema.json#/$defs/paper_id" },
+    "type": {
+      "type": "string",
+      "enum": [
+        "algorithm",
+        "equation",
+        "hyperparameter",
+        "dataset",
+        "component",
+        "result",
+        "assumption"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["extracted", "verified", "rejected", "superseded"]
+    },
+    "provenance": { "$ref": "common.schema.json#/$defs/provenance" },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "citation_trace": { "$ref": "common.schema.json#/$defs/check_result" },
+        "symbol_check": { "$ref": "common.schema.json#/$defs/check_result" },
+        "range_check": { "$ref": "common.schema.json#/$defs/check_result" },
+        "self_consistency": {
+          "type": "string",
+          "pattern": "^([0-9]+/[0-9]+|n/a)$",
+          "description": "Agreement across N re-extractions, e.g. '3/3'."
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": [
+        "citation_trace",
+        "symbol_check",
+        "range_check",
+        "self_consistency",
+        "notes"
+      ],
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "description": "Type-specific; validated against the owning extractor's output_schema."
+    },
+    "confidence": { "$ref": "common.schema.json#/$defs/confidence" }
+  },
+  "required": [
+    "claim_id",
+    "paper_id",
+    "type",
+    "status",
+    "provenance",
+    "verification",
+    "payload",
+    "confidence"
+  ],
+  "additionalProperties": false
+}

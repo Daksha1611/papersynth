@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/payload.algorithm.json",
+  "title": "algorithm payload",
+  "type": "object",
+  "$defs": {
+    "port": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "label": { "type": ["string", "null"], "description": "e.g. 'Algorithm 1'." },
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
+    "outputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "integer", "minimum": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "refs_equations": { "type": "array", "items": { "type": "string" } },
+          "refs_symbols": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["index", "text"],
+        "additionalProperties": false
+      }
+    },
+    "complexity": {
+      "type": ["object", "null"],
+      "properties": {
+        "time": { "type": ["string", "null"] },
+        "space": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "preconditions": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["name", "inputs", "outputs", "steps"],
+  "additionalProperties": false
+}

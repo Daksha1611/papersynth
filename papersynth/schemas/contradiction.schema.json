@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/contradiction.schema.json",
+  "title": "Contradiction",
+  "type": "object",
+  "$defs": {
+    "conflict_type": {
+      "type": "string",
+      "enum": [
+        "VALUE_CONFLICT",
+        "METHOD_CONFLICT",
+        "RESULT_CONFLICT",
+        "DEFINITION_CONFLICT",
+        "SCOPE_CONFLICT"
+      ]
+    },
+    "position": {
+      "type": "object",
+      "properties": {
+        "claim_id": { "$ref": "common.schema.json#/$defs/claim_id" },
+        "paper_id": { "$ref": "common.schema.json#/$defs/paper_id" },
+        "position": { "type": "string", "description": "Human-readable rendering of the stance." },
+        "support": {
+          "type": "object",
+          "properties": {
+            "venue": { "type": ["string", "null"] },
+            "year": { "type": ["integer", "null"] },
+            "is_primary": { "type": "boolean" },
+            "specificity": { "$ref": "common.schema.json#/$defs/confidence" },
+            "peer_reviewed": { "type": "boolean" },
+            "stated_explicitly": { "type": "boolean" }
+          },
+          "required": ["is_primary", "specificity"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["claim_id", "paper_id", "position", "support"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "contradiction_id": { "type": "string", "pattern": "^ctr_[0-9a-z_]+$" },
+    "cluster_id": { "type": "string", "pattern": "^cnc_[a-z0-9_]+$" },
+    "type": { "$ref": "#/$defs/conflict_type" },
+    "severity": { "$ref": "common.schema.json#/$defs/criticality" },
+    "description": { "type": "string", "minLength": 1 },
+    "positions": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/position" }
+    },
+    "detected_by": {
+      "type": "string",
+      "pattern": "^[a-z_]+@[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "required": [
+    "contradiction_id",
+    "cluster_id",
+    "type",
+    "severity",
+    "description",
+    "positions",
+    "detected_by"
+  ],
+  "additionalProperties": false
+}

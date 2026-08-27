@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/payload.equation.json",
+  "title": "equation payload",
+  "type": "object",
+  "properties": {
+    "label": { "type": ["string", "null"], "description": "e.g. 'Eq. 3'." },
+    "latex": { "type": "string", "minLength": 1 },
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sym": { "type": "string", "minLength": 1 },
+          "role": { "type": "string" },
+          "shape": { "type": ["string", "null"] },
+          "defined_at": {
+            "anyOf": [
+              { "$ref": "common.schema.json#/$defs/span_id" },
+              { "type": "null" }
+            ],
+            "description": "null => undefined symbol; symbol_check fails."
+          }
+        },
+        "required": ["sym", "role", "defined_at"],
+        "additionalProperties": false
+      }
+    },
+    "undefined_symbols": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Non-empty => symbol_check fails."
+    },
+    "source_fidelity": { "$ref": "common.schema.json#/$defs/source_fidelity" }
+  },
+  "required": ["latex", "symbols", "undefined_symbols", "source_fidelity"],
+  "additionalProperties": false
+}

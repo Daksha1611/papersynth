@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+.venv/
+venv/
+env/
+
+.env
+.env.local
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# run workspaces are outputs, never source
+runs/
+!runs/.gitkeep
+
+# local caches
+.papersynth_cache/
+*.chroma/
+chroma_data/
+
+.DS_Store
+.idea/
+.vscode/

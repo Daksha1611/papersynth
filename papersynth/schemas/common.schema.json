@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/common.schema.json",
+  "title": "PaperSynth shared definitions",
+  "$defs": {
+    "claim_id": {
+      "type": "string",
+      "pattern": "^clm_[0-9a-f]{6}$",
+      "description": "Content-derived claim identifier, stable across runs."
+    },
+    "paper_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "arXiv ID, DOI, or 'sha256:<hex>' for a local PDF."
+    },
+    "span_id": {
+      "type": "string",
+      "pattern": "^[^#]+#s[0-9]+\\.p[0-9]+\\.[0-9]+$",
+      "description": "Stable addressable span: {paper_id}#s{section}.p{paragraph}.{char_offset}"
+    },
+    "criticality": {
+      "type": "string",
+      "enum": ["BLOCKING", "MATERIAL", "COSMETIC"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "extraction_method": {
+      "type": "string",
+      "enum": ["llm", "regex", "latex_parser", "ocr_math"]
+    },
+    "source_fidelity": {
+      "type": "string",
+      "enum": ["latex_native", "text_layer", "ocr_recovered"]
+    },
+    "check_result": {
+      "type": "string",
+      "enum": ["pass", "fail", "warn", "n/a"]
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Mandatory attribution record. No claim exists without one (FR-06).",
+      "properties": {
+        "paper_id": { "$ref": "#/$defs/paper_id" },
+        "span_id": { "$ref": "#/$defs/span_id" },
+        "section": { "type": "string" },
+        "page": { "type": ["integer", "null"], "minimum": 1 },
+        "char_start": { "type": "integer", "minimum": 0 },
+        "char_end": { "type": "integer", "minimum": 0 },
+        "quote_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Hash of the source text, never the text itself (R-12)."
+        },
+        "extraction_method": { "$ref": "#/$defs/extraction_method" },
+        "extractor_version": {
+          "type": "string",
+          "pattern": "^[a-z_]+@[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "secondary": {
+          "type": ["object", "null"],
+          "description": "Set when the claim is attributed to a work cited by this paper.",
+          "properties": {
+            "cited_ref": { "type": "string" },
+            "resolved_paper_id": { "type": ["string", "null"] }
+          },
+          "required": ["cited_ref"],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "paper_id",
+        "span_id",
+        "section",
+        "char_start",
+        "char_end",
+        "quote_hash",
+        "extraction_method",
+        "extractor_version",
+        "confidence"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

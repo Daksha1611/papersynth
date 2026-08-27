@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/payload.hyperparameter.json",
+  "title": "hyperparameter payload",
+  "type": "object",
+  "properties": {
+    "canonical_name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Normalized name, e.g. learning_rate."
+    },
+    "paper_symbol": {
+      "type": ["string", "null"],
+      "description": "As written in the paper, LaTeX, e.g. \\eta."
+    },
+    "value": {
+      "type": ["number", "string", "boolean"],
+      "description": "String only for non-numeric values, e.g. 'cosine'."
+    },
+    "value_type": {
+      "type": "string",
+      "enum": ["float", "int", "bool", "categorical"]
+    },
+    "unit": {
+      "type": ["string", "null"],
+      "description": "e.g. steps, epochs, tokens; null when dimensionless."
+    },
+    "applies_to": {
+      "type": "string",
+      "description": "Component ID or the literal 'global'."
+    },
+    "condition": {
+      "type": ["string", "null"],
+      "description": "Scope under which the value holds. Critical for ER-04."
+    },
+    "stated_explicitly": {
+      "type": "boolean",
+      "description": "false => derived from a figure/table; cannot auto-resolve conflicts (ER-07)."
+    }
+  },
+  "required": [
+    "canonical_name",
+    "value",
+    "value_type",
+    "applies_to",
+    "stated_explicitly"
+  ],
+  "additionalProperties": false
+}
