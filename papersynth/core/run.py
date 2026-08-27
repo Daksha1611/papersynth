@@ -34,6 +34,7 @@ from papersynth.core.models import (
     utcnow,
 )
 from papersynth.extract import registry
+from papersynth.gapcheck import Checklist
 from papersynth.llm.base import LLMProvider
 from papersynth.reconcile import Policy, PolicyEngine
 from papersynth.synth import SpecBuilder, SpecValidator, render_review
@@ -168,6 +169,7 @@ class Pipeline:
             )
 
         result.reconciliation = self._reconcile(result.contradictions)
+        result.gaps = self._gapcheck(result)
         if self.workspace:
             self.workspace.write_yaml("05_reconciliation.yaml", result.reconciliation.model_dump())
             self.workspace.write_yaml("06_gaps.yaml", [g.model_dump() for g in result.gaps])
@@ -231,6 +233,20 @@ class Pipeline:
             for conflict_type, detector in DETECTORS.items()
         }
         return PolicyEngine(policy, auto_resolvable=auto_resolvable).resolve(contradictions)
+
+    def _gapcheck(self, result: RunResult) -> list[Gap]:
+        """Stage 6, Pass A. What the corpus does not supply.
+
+        Runs against the whole corpus rather than per paper: a value stated in
+        any one paper satisfies the requirement, and reporting it as missing
+        because a different paper omitted it would be false.
+        """
+        checklist = Checklist.load(self.settings.checklist)
+        return checklist.audit(
+            list(result.claims.values()),
+            paper_ids=[d.paper_id for d in result.documents],
+            component_id=None,
+        )
 
     def _synthesize(self, result: RunResult, *, objective: str, reviewer: str | None) -> None:
         builder = SpecBuilder(

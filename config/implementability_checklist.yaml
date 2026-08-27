@@ -1,0 +1,134 @@
+# Implementability checklist (section 8.6, Pass A).
+#
+# Each entry is a field an implementer must have a value for before they can
+# write working code. If no paper in the corpus supplies it, a Gap is raised
+# and travels with the spec under missing_but_critical.
+#
+# Gaps do NOT block emission - only unresolved BLOCKING contradictions do. A
+# gap is information the implementer needs, not a fault in the run: the corpus
+# genuinely does not contain the answer, and saying so is the correct output.
+#
+# Criticality here answers "what happens if this is guessed wrong?":
+# A gap means no VERIFIED CLAIM supplies the field. That is not identical to
+# "no paper states it": extraction can miss a value the paper does state, and a
+# claim can fail verification. So question wording must not assert corpus-wide
+# absence, and "the paper text itself, if extraction missed it" is listed as a
+# suggested source wherever a reader might otherwise go inventing a value.
+#
+#   BLOCKING  there is no sensible default; a guess is a coin flip
+#   MATERIAL  a conventional default exists but changes results
+#   COSMETIC  affects presentation or convenience only
+#
+# `applies_when` keeps the list honest. Asking for a learning rate in a corpus
+# that describes no training procedure would manufacture a gap that is not one.
+
+version: "1.0.0"
+
+groups:
+  - id: optimization
+    description: What is needed to run the training loop at all.
+    applies_when: any_hyperparameter
+    required:
+      - field: learning_rate
+        kind: hyperparameter
+        criticality: BLOCKING
+        question: >
+          What learning rate should be used? No verified claim supplies one,
+          and there is no defensible default across architectures.
+        suggested_sources:
+          - the paper text itself, if extraction missed it
+          - appendix or supplementary material
+          - the authors' reference implementation
+          - a follow-up paper reproducing this method
+
+      - field: optimizer
+        kind: hyperparameter
+        criticality: BLOCKING
+        question: >
+          Which optimizer is used? Adam and SGD with momentum give materially
+          different training dynamics, and no verified claim names one.
+        suggested_sources:
+          - the paper text itself, if extraction missed it
+          - experimental setup section
+          - the authors' reference implementation
+
+      - field: batch_size
+        kind: hyperparameter
+        criticality: MATERIAL
+        question: >
+          What batch size was used? This interacts with the learning rate, so
+          picking one without the other risks an unstable pairing.
+        suggested_sources:
+          - experimental setup section
+          - hardware description, which often implies the batch size
+
+      - field: weight_decay
+        kind: hyperparameter
+        criticality: MATERIAL
+        question: >
+          Is weight decay applied, and at what strength? Assuming zero is a
+          real choice, not a neutral one.
+        suggested_sources:
+          - training details
+          - the authors' reference implementation
+
+  - id: schedule
+    description: How long training runs and how the rate changes over time.
+    applies_when: any_hyperparameter
+    required:
+      - field: num_steps_or_epochs
+        kind: one_of
+        one_of: [num_steps, num_epochs]
+        criticality: MATERIAL
+        question: >
+          How long is the model trained - how many steps or epochs? Without
+          this, reproduction cannot match the reported results.
+        suggested_sources:
+          - experimental setup section
+          - training curves in figures
+
+      - field: warmup_steps
+        kind: hyperparameter
+        criticality: COSMETIC
+        question: >
+          Is a warmup schedule used? Many transformer recipes require one for
+          stability, but its absence is often intentional.
+        suggested_sources:
+          - training details
+
+  - id: initialization
+    description: Starting state, which is routinely omitted from papers.
+    applies_when: any_hyperparameter
+    required:
+      - field: weight_initialization
+        kind: hyperparameter
+        criticality: MATERIAL
+        question: >
+          How are weights initialized? Papers almost never state this, yet it
+          affects whether training converges at the reported rate.
+        suggested_sources:
+          - the authors' reference implementation
+          - the framework default in use at publication time
+
+      - field: random_seed
+        kind: hyperparameter
+        criticality: COSMETIC
+        question: >
+          Which seed produced the reported numbers? Needed for exact
+          reproduction, not for a working implementation.
+        suggested_sources:
+          - the authors' reference implementation
+
+  - id: regularization
+    description: Choices that shape generalization.
+    applies_when: any_hyperparameter
+    required:
+      - field: dropout
+        kind: hyperparameter
+        criticality: MATERIAL
+        question: >
+          Is dropout applied, and at what rate? Assuming none will usually
+          train, but will not reproduce the reported numbers.
+        suggested_sources:
+          - model description
+          - the authors' reference implementation

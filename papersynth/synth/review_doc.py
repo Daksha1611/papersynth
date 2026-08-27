@@ -86,8 +86,10 @@ def render(
     lines += [f"## Missing but critical ({len(missing)})", ""]
     if missing:
         lines += [
-            "Nothing in the corpus supplies these. Do not let a coding agent",
-            "invent them.",
+            "No verified claim supplies these. That is not quite the same as",
+            "the papers being silent - extraction can miss a stated value - so",
+            "check the source before treating any of them as genuinely absent.",
+            "Either way, do not let a coding agent invent them.",
             "",
         ]
         for gap in missing:
