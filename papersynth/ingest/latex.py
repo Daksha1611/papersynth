@@ -76,6 +76,19 @@ _DROP_ENVS = re.compile(
 )
 _STRAY_COMMAND = re.compile(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?")
 
+#: TeX escapes for characters that are literal in prose. Order matters only in
+#: that backslash itself must come last.
+_TEX_ESCAPES = (
+    ("\\_", "_"),
+    ("\\&", "&"),
+    ("\\%", "%"),
+    ("\\#", "#"),
+    ("\\$", "$"),
+    ("\\{", "{"),
+    ("\\}", "}"),
+    ("\\textbackslash", "\\"),
+)
+
 
 class LatexIngestor:
     """Ingests a .tex file, a directory of sources, or an e-print tarball."""
@@ -108,23 +121,42 @@ class LatexIngestor:
         return self._read_tarball(path), ids.file_sha256(str(path))
 
     def _read_tarball(self, path: Path) -> str:
-        try:
-            with tarfile.open(path) as tar:
-                members = [m for m in tar.getmembers() if m.isfile() and m.name.endswith(".tex")]
-                if not members:
-                    raise IngestError(f"No .tex file inside {path.name}")
-                # Concatenate every .tex, main file first, so \input'd sections
-                # are present without having to resolve paths inside the archive.
-                ordered = sorted(members, key=lambda m: (not self._looks_main(m.name), m.name))
-                parts = []
-                for member in ordered:
-                    handle = tar.extractfile(member)
-                    if handle is None:
-                        continue
-                    parts.append(handle.read().decode("utf-8", errors="replace"))
-                return "\n".join(parts)
-        except tarfile.TarError as exc:
-            raise IngestError(f"Cannot read e-print archive {path.name}: {exc}") from exc
+        """Unpack the e-print archive and resolve it like a source directory.
+
+        Real arXiv submissions are split across files - ms.tex carrying
+        \\input{introduction}, \\input{model_architecture} and so on. An earlier
+        version concatenated every .tex with the main file first, which looked
+        reasonable and silently discarded the paper: everything after
+        \\end{document} in the main file falls outside the body, so a
+        multi-file submission parsed down to its abstract and a stray heading.
+
+        Unpacking to a directory and reusing the \\input resolver is the only
+        approach that puts sections in their real order, which the span IDs
+        depend on.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="papersynth_eprint_") as tmp:
+            root = Path(tmp)
+            try:
+                with tarfile.open(path) as tar:
+                    members = [m for m in tar.getmembers() if m.isfile()]
+                    if not any(m.name.endswith(".tex") for m in members):
+                        raise IngestError(f"No .tex file inside {path.name}")
+                    # filter="data" refuses absolute paths, parent traversal,
+                    # and device files. An e-print is untrusted input.
+                    try:
+                        tar.extractall(root, filter="data")
+                    except TypeError:  # pragma: no cover - Python < 3.11.4
+                        tar.extractall(root)
+            except tarfile.TarError as exc:
+                raise IngestError(f"Cannot read e-print archive {path.name}: {exc}") from exc
+
+            candidates = sorted(root.rglob("*.tex"))
+            if not candidates:
+                raise IngestError(f"No .tex file inside {path.name}")
+            main = self._pick_main_tex(candidates)
+            return self._resolve_inputs(main, main.parent)
 
     @staticmethod
     def _looks_main(name: str) -> bool:
@@ -132,12 +164,19 @@ class LatexIngestor:
         return stem in {"main", "paper", "ms", "article", "root", "arxiv"}
 
     def _pick_main_tex(self, candidates: list[Path]) -> Path:
+        """The file declaring \\begin{document}, preferring a conventional name.
+
+        Submissions sometimes ship a template or a rebuttal alongside the paper,
+        both with their own \\begin{document}. Sorting by name plausibility
+        first keeps ms.tex ahead of supplement.tex.
+        """
         if not candidates:
             raise IngestError("No .tex files found")
-        for path in candidates:
+        ordered = sorted(candidates, key=lambda p: (not self._looks_main(p.name), str(p)))
+        for path in ordered:
             if "\\begin{document}" in path.read_text(encoding="utf-8", errors="replace"):
                 return path
-        return candidates[0]
+        return ordered[0]
 
     def _resolve_inputs(self, main: Path, root: Path, depth: int = 0) -> str:
         """Inline \\input and \\include so section order is preserved."""
@@ -341,8 +380,16 @@ def _clean_inline(text: str) -> str:
     text = _LABEL.sub("", text)
     text = re.sub(r"\\begin\{[^}]*\}|\\end\{[^}]*\}", " ", text)
     text = _STRAY_COMMAND.sub(" ", text)
-    text = text.replace("~", " ").replace("\\&", "&").replace("\\%", "%")
-    text = re.sub(r"[{}]", "", text)
+    # Strip grouping braces, but not escaped literal ones.
+    text = re.sub(r"(?<!\\)[{}]", "", text)
+    # Unescape TeX's escaped literals last, so the characters they produce are
+    # not mistaken for markup by the steps above. This matters more than it
+    # looks: a paper writing warmup\_steps stores as "warmup\_steps", a model
+    # correctly quotes "warmup_steps=4000", find_span misses, and a perfectly
+    # good claim is rejected as a fabrication.
+    for escaped, literal in _TEX_ESCAPES:
+        text = text.replace(escaped, literal)
+    text = text.replace("~", " ")
     text = re.sub(r"[ \t]+", " ", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 

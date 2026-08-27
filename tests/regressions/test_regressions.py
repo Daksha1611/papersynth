@@ -333,3 +333,125 @@ class TestR004SupersededValueReemitted:
         spec = build_spec(claims, [contradiction], resolved)
         large = [hp for hp in emitted(spec, "learning_rate") if hp["condition"] == "large model"]
         assert [hp["value"] for hp in large] == [5e-05]
+
+
+class TestR005MultiFileEprintDiscarded:
+    """The tarball path concatenated every .tex with the main file first
+    instead of resolving \\input. Real arXiv submissions split the paper across
+    files, so everything after \\end{document} in the main file fell outside the
+    body and was dropped. "Attention Is All You Need" parsed down to 3 sections
+    and zero equations - and looked like a successful ingest."""
+
+    @pytest.fixture
+    def eprint(self, tmp_path):
+        """A tarball shaped like a real submission: main file plus \\input'd parts."""
+        import tarfile
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ms.tex").write_text(
+            r"\title{Split Submission}"
+            "\n\\begin{document}\n"
+            r"\input{introduction}"
+            "\n"
+            r"\input{method}"
+            "\n\\end{document}\n"
+        )
+        (src / "introduction.tex").write_text(
+            "\\section{Introduction}\nRecurrent models limit parallelism in sequence tasks.\n"
+        )
+        (src / "method.tex").write_text(
+            "\\section{Method}\n"
+            "We train with a learning rate of 0.0001 for the base model.\n\n"
+            "\\begin{equation}\\label{eq:attn}\nE = mc^2\n\\end{equation}\n"
+        )
+
+        archive = tmp_path / "eprint.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            for path in sorted(src.iterdir()):
+                tar.add(path, arcname=path.name)
+        return archive
+
+    def test_inputs_from_the_archive_are_resolved(self, eprint):
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest(str(eprint), paper_id="split.001")
+        assert [s.title for s in doc.sections] == ["Introduction", "Method"]
+
+    def test_content_from_input_files_survives(self, eprint):
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest(str(eprint), paper_id="split.001")
+        assert "learning rate of 0.0001" in doc.full_text
+        assert "limit parallelism" in doc.full_text
+
+    def test_equations_inside_input_files_are_captured(self, eprint):
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest(str(eprint), paper_id="split.001")
+        assert len(doc.equations) == 1
+        assert doc.equations[0].label == "eq:attn"
+
+    def test_sections_keep_their_source_order(self, eprint):
+        """Span IDs are positional, so order is not cosmetic."""
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest(str(eprint), paper_id="split.001")
+        assert doc.sections[0].title == "Introduction"
+
+
+class TestR006TexEscapesSurvivedIntoText:
+    """LaTeX escapes were left in the stored text, so a paper writing
+    warmup\\_steps stored "warmup\\_steps". A model correctly quoting
+    "warmup_steps=4000" then failed find_span, and an accurate claim was
+    rejected as a fabrication - the worst possible direction for this error."""
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            (r"We used warmup\_steps=4000 for training.", "warmup_steps=4000"),
+            (r"Accuracy improved by 5\% over the baseline.", "5% over"),
+            (r"The Smith \& Jones method is used here.", "Smith & Jones"),
+            (r"We denote the set as \{a, b\} in this work.", "{a, b}"),
+            (r"Costs approximately \$100 per run of this.", "$100"),
+            (r"See section \#3 for the full details here.", "#3"),
+        ],
+    )
+    def test_escaped_literals_are_unescaped(self, source, expected):
+        from papersynth.ingest.latex import parse_latex
+
+        doc = parse_latex(
+            "\\begin{document}\\section{S}\n" + source + "\n\\end{document}",
+            paper_id="esc.001",
+            sha256="a" * 64,
+        )
+        assert expected in doc.full_text
+
+    def test_an_unescaped_quote_resolves_to_a_span(
+        self,
+    ):
+        """The actual failure: the claim must be anchorable."""
+        from papersynth.ingest.latex import parse_latex
+
+        doc = parse_latex(
+            "\\begin{document}\\section{Training}\n"
+            r"This corresponds to warmup\_steps=4000 during the schedule."
+            "\n\\end{document}",
+            paper_id="esc.002",
+            sha256="b" * 64,
+        )
+        assert doc.find_span("warmup_steps=4000") is not None
+
+    def test_grouping_braces_are_still_stripped(self):
+        """Unescaping must not resurrect markup braces as content."""
+        from papersynth.ingest.latex import parse_latex
+
+        doc = parse_latex(
+            "\\begin{document}\\section{S}\n"
+            r"The \textbf{bold claim} stands unchallenged in this work."
+            "\n\\end{document}",
+            paper_id="esc.003",
+            sha256="c" * 64,
+        )
+        assert "bold claim" in doc.full_text
+        assert "{" not in doc.full_text
