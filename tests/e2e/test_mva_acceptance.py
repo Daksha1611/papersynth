@@ -31,43 +31,98 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "three_paper"
 # so the suite is deterministic, offline, and free (section 14.4).
 EXTRACTIONS = {
     "paper_a": [
-        {"canonical_name": "learning_rate", "value": 0.0001, "value_type": "float",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "learning rate of 0.0001 for the base\nmodel"},
-        {"canonical_name": "dropout", "value": 0.1, "value_type": "float",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "dropout rate of 0.1"},
-        {"canonical_name": "batch_size", "value": 128, "value_type": "int",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "batch size of 128 sequences"},
-        {"canonical_name": "num_layers", "value": 6, "value_type": "int",
-         "condition": None, "stated_explicitly": True,
-         "quote": "We use 6 layers throughout"},
+        {
+            "canonical_name": "learning_rate",
+            "value": 0.0001,
+            "value_type": "float",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "learning rate of 0.0001 for the base\nmodel",
+        },
+        {
+            "canonical_name": "dropout",
+            "value": 0.1,
+            "value_type": "float",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "dropout rate of 0.1",
+        },
+        {
+            "canonical_name": "batch_size",
+            "value": 128,
+            "value_type": "int",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "batch size of 128 sequences",
+        },
+        {
+            "canonical_name": "num_layers",
+            "value": 6,
+            "value_type": "int",
+            "condition": None,
+            "stated_explicitly": True,
+            "quote": "We use 6 layers throughout",
+        },
     ],
     "paper_b": [
-        {"canonical_name": "learning_rate", "value": 0.0003, "value_type": "float",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "learning rate of 0.0003 for the base model"},
-        {"canonical_name": "dropout", "value": 0.1, "value_type": "float",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "dropout rate of 0.1 to remain\ncomparable"},
-        {"canonical_name": "batch_size", "value": 256, "value_type": "int",
-         "condition": "our runs", "stated_explicitly": True,
-         "quote": "batch size of 256 sequences"},
-        {"canonical_name": "num_layers", "value": 6, "value_type": "int",
-         "condition": None, "stated_explicitly": True,
-         "quote": "using 6 layers"},
+        {
+            "canonical_name": "learning_rate",
+            "value": 0.0003,
+            "value_type": "float",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "learning rate of 0.0003 for the base model",
+        },
+        {
+            "canonical_name": "dropout",
+            "value": 0.1,
+            "value_type": "float",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "dropout rate of 0.1 to remain\ncomparable",
+        },
+        {
+            "canonical_name": "batch_size",
+            "value": 256,
+            "value_type": "int",
+            "condition": "our runs",
+            "stated_explicitly": True,
+            "quote": "batch size of 256 sequences",
+        },
+        {
+            "canonical_name": "num_layers",
+            "value": 6,
+            "value_type": "int",
+            "condition": None,
+            "stated_explicitly": True,
+            "quote": "using 6 layers",
+        },
     ],
     "paper_c": [
-        {"canonical_name": "learning_rate", "value": 0.0001, "value_type": "float",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "For the base model we use a learning rate of\n0.0001"},
-        {"canonical_name": "learning_rate", "value": 0.00005, "value_type": "float",
-         "condition": "large model", "stated_explicitly": True,
-         "quote": "For the large model we use a learning rate of 0.00005"},
-        {"canonical_name": "dropout", "value": 0.1, "value_type": "float",
-         "condition": "base model", "stated_explicitly": True,
-         "quote": "dropout rate of 0.1 for the base model"},
+        {
+            "canonical_name": "learning_rate",
+            "value": 0.0001,
+            "value_type": "float",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "For the base model we use a learning rate of\n0.0001",
+        },
+        {
+            "canonical_name": "learning_rate",
+            "value": 0.00005,
+            "value_type": "float",
+            "condition": "large model",
+            "stated_explicitly": True,
+            "quote": "For the large model we use a learning rate of 0.00005",
+        },
+        {
+            "canonical_name": "dropout",
+            "value": 0.1,
+            "value_type": "float",
+            "condition": "base model",
+            "stated_explicitly": True,
+            "quote": "dropout rate of 0.1 for the base model",
+        },
     ],
 }
 
@@ -164,9 +219,7 @@ class TestAcceptanceCriterion:
     def test_the_conflict_appears_in_the_emitted_spec(self, run):
         """Criterion (a): in open_conflicts, where the implementer will see it."""
         result, _ = run
-        entry = next(
-            (c for c in result.open_conflicts if c["type"] == "VALUE_CONFLICT"), None
-        )
+        entry = next((c for c in result.open_conflicts if c["type"] == "VALUE_CONFLICT"), None)
         assert entry is not None, f"open_conflicts was {result.open_conflicts}"
         assert len(entry["positions"]) == 2
         assert all(p["provenance"].get("span_id") for p in entry["positions"])
