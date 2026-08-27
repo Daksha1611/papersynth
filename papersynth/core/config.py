@@ -1,0 +1,134 @@
+"""Configuration.
+
+Everything is env-overridable with a ``PAPERSYNTH_`` prefix, and every setting
+that changes model output is recorded in the run manifest - a run you cannot
+reproduce is a run you cannot debug (NFR-02, NFR-06).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ProviderId = Literal["groq", "gemini", "openrouter", "vllm", "stub"]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="PAPERSYNTH_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # -- providers ---------------------------------------------------------
+    # Free tiers only, tried in order. A run cannot spend money on this chain.
+    provider_chain: list[ProviderId] = Field(default=["groq", "gemini"])
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_rpd_limit: int = 1000
+
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_rpd_limit: int = 1500
+
+    openrouter_free_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    openrouter_rpd_limit: int = 50
+
+    vllm_url: str = "http://localhost:11434/v1"
+    vllm_model: str = "qwen2.5:14b"
+
+    #: Self-throttle at this fraction of a provider's known daily ceiling, so
+    #: the router steps aside before burning a call to discover it is capped.
+    rpd_safety_margin: float = Field(default=0.9, gt=0.0, le=1.0)
+
+    # -- ingestion ---------------------------------------------------------
+    grobid_url: str = "http://localhost:8070"
+    grobid_timeout_s: float = 120.0
+    prefer_latex: bool = True
+    arxiv_api_url: str = "https://export.arxiv.org/api/query"
+
+    # -- call volume (section 6.4.5) --------------------------------------
+    self_consistency_n: int = Field(default=1, ge=1, le=9)
+    verify_batch_size: int = Field(default=10, ge=1, le=100)
+    cache_by_prompt_hash: bool = True
+
+    # -- pipeline ----------------------------------------------------------
+    workspace: Path = Path("./runs")
+    cache_dir: Path = Path("./.papersynth_cache")
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    align_threshold: float = Field(default=0.82, ge=0.0, le=1.0)
+    max_parallel_papers: int = Field(default=3, ge=1, le=32)
+    policy: Path = Path("config/reconcile_policy.yaml")
+    range_rules: Path = Path("config/range_rules.yaml")
+    checklist: Path = Path("config/implementability_checklist.yaml")
+
+    #: Below this, a claim stays 'extracted' rather than 'verified', which
+    #: excludes it from auto-resolution (section 8.3.4).
+    confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+
+    @field_validator("provider_chain", mode="before")
+    @classmethod
+    def _split_chain(cls, v: object) -> object:
+        """Accept 'groq,gemini' as well as a real list."""
+        if isinstance(v, str):
+            return [part.strip() for part in v.split(",") if part.strip()]
+        return v
+
+    def rpd_limit(self, provider_id: str) -> int | None:
+        return {
+            "groq": self.groq_rpd_limit,
+            "gemini": self.gemini_rpd_limit,
+            "openrouter": self.openrouter_rpd_limit,
+        }.get(provider_id)
+
+    def model_for(self, provider_id: str) -> str:
+        return {
+            "groq": self.groq_model,
+            "gemini": self.gemini_model,
+            "openrouter": self.openrouter_free_model,
+            "vllm": self.vllm_model,
+            "stub": "stub",
+        }.get(provider_id, "unknown")
+
+    def reproducibility_fingerprint(self) -> dict[str, object]:
+        """The subset of settings that can change model output.
+
+        Recorded in the run manifest so a spec that differs from a prior run
+        can be attributed to a config change rather than model drift (R-06).
+        """
+        return {
+            "provider_chain": list(self.provider_chain),
+            "models": {p: self.model_for(p) for p in self.provider_chain},
+            "temperature": self.temperature,
+            "self_consistency_n": self.self_consistency_n,
+            "align_threshold": self.align_threshold,
+            "confidence_threshold": self.confidence_threshold,
+            "prefer_latex": self.prefer_latex,
+        }
+
+
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """Process-wide settings singleton."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+def set_settings(settings: Settings) -> None:
+    """Override the singleton. Tests and the CLI use this; nothing else should."""
+    global _settings
+    _settings = settings
+
+
+def reset_settings() -> None:
+    global _settings
+    _settings = None

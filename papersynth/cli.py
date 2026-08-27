@@ -36,8 +36,13 @@ def _version_callback(value: bool) -> None:
 def main(
     version: Annotated[
         bool,
-        typer.Option("--version", "-V", callback=_version_callback, is_eager=True,
-                     help="Show version and exit."),
+        typer.Option(
+            "--version",
+            "-V",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show version and exit.",
+        ),
     ] = False,
 ) -> None:
     """PaperSynth: N papers in, one verified implementation spec out."""
@@ -69,7 +74,7 @@ def validate_schemas() -> None:
             # Force $ref resolution by validating a deliberately empty instance.
             list(validator.iter_errors({}))
             table.add_row(name, schema.get("$id", "-"), "[green]ok[/green]")
-        except Exception as exc:  # noqa: BLE001 - report, do not abort the sweep
+        except Exception as exc:
             failed += 1
             table.add_row(name, "-", f"[red]{type(exc).__name__}: {exc}[/red]")
 

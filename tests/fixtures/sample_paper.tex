@@ -1,0 +1,55 @@
+\documentclass{article}
+\usepackage{amsmath}
+
+\title{A Minimal Attention Model}
+\author{Test Author}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe a small attention model used as an ingestion fixture.
+\end{abstract}
+
+\section{Introduction}
+Recurrent models process sequences step by step, which limits parallelism.
+We propose an attention-only architecture following \citep{bahdanau2014}.
+
+% This comment must never appear in the parsed output.
+The model is \emph{simple} and \textbf{fast} to train.
+
+\section{Method}
+\label{sec:method}
+
+Attention is computed over queries, keys, and values:
+
+\begin{equation}
+\label{eq:attention}
+\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V
+\end{equation}
+
+where $d_k$ is the key dimension. See Equation~\ref{eq:attention} for details.
+
+\begin{algorithm}
+\caption{Training loop}
+\label{alg:train}
+\begin{algorithmic}
+\STATE Initialize parameters
+\STATE Sample a minibatch
+\end{algorithmic}
+\end{algorithm}
+
+\section{Experiments}
+We train with the Adam optimizer using a learning rate of 0.0001 and a dropout
+rate of 0.1 on the base model. Training runs for 100000 steps.
+
+\begin{figure}
+\includegraphics{plot.png}
+\caption{A figure whose body should not become prose.}
+\end{figure}
+
+\begin{thebibliography}{9}
+\bibitem{bahdanau2014} Bahdanau et al. Neural machine translation. arXiv:1409.0473, 2014.
+\end{thebibliography}
+
+\end{document}

@@ -75,6 +75,13 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
 ignore = ["B008", "RUF012"]
 
+[tool.ruff.lint.per-file-ignores]
+# These modules deliberately contain the confusable characters they exist to
+# normalize away (ligatures, smart quotes) or to detect (math glyphs).
+# RUF001 flagging them as ambiguous is exactly backwards here.
+"papersynth/ingest/base.py" = ["RUF001"]
+"papersynth/ingest/pdf.py" = ["RUF001"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_unused_configs = true
