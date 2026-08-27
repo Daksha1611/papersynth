@@ -1,0 +1,95 @@
+# Reconciliation policy (section 8.5).
+#
+# Rules are evaluated in order. The first whose predicate fires decides the
+# outcome. If none fires, the fallback applies - and the fallback is always
+# ESCALATED (DD-03).
+#
+# That is the load-bearing decision in this file. The system never resolves a
+# conflict because "some answer is better than none". A tool that resolves 100%
+# of conflicts is indistinguishable from one that resolves 60% correctly and
+# 40% arbitrarily, unless it tells you which is which. Escalation is the
+# feature, not a shortfall.
+#
+# `when` names a predicate from the built-in vocabulary (see reconcile/policy.py
+# for the list). Predicates are code so that resolutions are deterministic and
+# auditable; which rules exist, their order, and their actions are config.
+
+policy_version: "1.0.0"
+
+rules:
+  - id: prefer_scoped_over_global
+    description: >
+      Exactly one position states an explicit condition; the others are
+      unconditional defaults. The scoped value is the one that applies.
+    applies_to: [VALUE_CONFLICT, SCOPE_CONFLICT]
+    when: exactly_one_scoped
+    action: SCOPED
+    select: only_scoped
+    confidence: high
+
+  - id: prefer_specific_over_general
+    description: >
+      One position is meaningfully more specific than every other - it names a
+      narrower scope, a component, or an explicit condition.
+    applies_to: [VALUE_CONFLICT]
+    when: specificity_gap
+    params:
+      min_gap: 0.3
+    action: SELECTED
+    select: highest_specificity
+    confidence: high
+
+  - id: prefer_primary_source
+    description: >
+      Exactly one position comes from the paper that originally introduced the
+      concept. A later paper restating it is a secondary account.
+    applies_to: [VALUE_CONFLICT, DEFINITION_CONFLICT]
+    when: exactly_one_primary
+    action: SELECTED
+    select: primary
+    confidence: medium
+
+  - id: prefer_recent_peer_reviewed
+    description: >
+      Positions are separated by several years and the more recent one is peer
+      reviewed. Weak evidence on its own, so a human confirms it.
+    applies_to: [VALUE_CONFLICT]
+    when: year_gap_and_recent_peer_reviewed
+    params:
+      min_years: 3
+    action: SELECTED
+    select: most_recent
+    confidence: low
+    requires_human_confirmation: true
+
+  - id: never_auto_resolve_results
+    description: >
+      Contradictory benchmark numbers are never reconciled automatically. Two
+      papers reporting different scores are reporting different experiments,
+      and picking one silently discards a real finding.
+    applies_to: [RESULT_CONFLICT]
+    when: always
+    action: ESCALATED
+    confidence: n/a
+
+  - id: method_conflicts_escalate
+    description: >
+      Incompatible approaches to the same sub-problem are an engineering
+      decision, not a lookup.
+    applies_to: [METHOD_CONFLICT]
+    when: severity_at_least_material
+    action: ESCALATED
+
+  - id: cosmetic_conflicts_auto_resolve
+    description: >
+      Values differing only in notation or formatting. Recorded for audit, but
+      no human judgement is needed.
+    applies_to: [VALUE_CONFLICT, DEFINITION_CONFLICT]
+    when: severity_is_cosmetic
+    action: SELECTED
+    select: first_by_claim_id
+    confidence: high
+
+fallback:
+  action: ESCALATED
+  confidence: n/a
