@@ -81,6 +81,8 @@ ignore = ["B008", "RUF012"]
 # RUF001 flagging them as ambiguous is exactly backwards here.
 "papersynth/ingest/base.py" = ["RUF001"]
 "papersynth/ingest/pdf.py" = ["RUF001"]
+# Normalizes a Unicode minus sign into ASCII; it must contain the character.
+"papersynth/extract/extractors/hyperparameter.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.11"
