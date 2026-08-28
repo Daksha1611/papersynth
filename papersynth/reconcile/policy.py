@@ -143,7 +143,14 @@ SELECTORS: dict[str, Selector] = {
 
 
 def _is_scoped(position: Position) -> bool:
-    return bool(position.support.specificity >= 0.7)
+    """Whether this position states an explicit condition.
+
+    Reads the flag the extractor set rather than a derived specificity score.
+    Thresholding the score made "scoped" mean 0.7 and "global" mean 0.6 - a
+    0.1 margin assembled from unrelated signals, deciding a conflict that
+    neither position was actually scoped for.
+    """
+    return position.support.has_condition
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +267,28 @@ class PolicyEngine:
     def _apply(self, rule: PolicyRule, contradiction: Contradiction) -> Resolution:
         if rule.action == "ESCALATED":
             return self._escalate(contradiction, rule.description or rule.id, rule_fired=rule.id)
+
+        if contradiction.severity == "BLOCKING":
+            # A BLOCKING conflict is defined as one where correct code cannot
+            # be written without deciding. Closing that on a heuristic defeats
+            # the gate it exists to raise.
+            #
+            # Observed on BERT/RoBERTa/ALBERT: batch_size 256 against 8000 was
+            # auto-resolved to BERT's 256 because RoBERTa's figure had been
+            # flagged "inferred", which discards RoBERTa's central finding on
+            # an extraction artifact. learning_rate was resolved on a 0.7
+            # against 0.6 specificity margin, which is not a reason to prefer
+            # one architecture's rate over another's.
+            #
+            # The rule that fired is still recorded, so the reviewer sees what
+            # the policy would have chosen and why (DD-03).
+            return self._escalate(
+                contradiction,
+                f"rule {rule.id!r} would have selected a position, but a BLOCKING "
+                "conflict is one where correct code cannot be written without "
+                "deciding - that decision is a human's",
+                rule_fired=rule.id,
+            )
 
         if not self.auto_resolvable.get(contradiction.type, True):
             return self._escalate(

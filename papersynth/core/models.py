@@ -215,6 +215,10 @@ class Support(_Model):
     specificity: float = Field(default=0.5, ge=0.0, le=1.0)
     peer_reviewed: bool = False
     stated_explicitly: bool = True
+    #: The claim named an explicit scope ("base model", "for WMT14"). Kept as a
+    #: fact rather than folded into specificity, because prefer_scoped_over_global
+    #: needs to know whether a condition exists, not how much one is worth.
+    has_condition: bool = False
 
 
 class Position(_Model):

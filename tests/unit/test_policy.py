@@ -93,10 +93,11 @@ class TestFallback:
 
 class TestRules:
     def test_a_scoped_position_beats_an_unconditional_default(self, engine):
+        """Scoped means the claim named a condition, not that it scored well."""
         result = engine.resolve_one(
             contradiction(
                 [
-                    position("clm_aaaaaa", "p1", 0.0001, specificity=0.9),
+                    position("clm_aaaaaa", "p1", 0.0001, specificity=0.9, has_condition=True),
                     position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
                 ]
             )
@@ -220,7 +221,14 @@ class TestGuards:
         result = engine.resolve_one(
             contradiction(
                 [
-                    position("clm_aaaaaa", "p1", 0.0001, specificity=0.9, stated_explicitly=False),
+                    position(
+                        "clm_aaaaaa",
+                        "p1",
+                        0.0001,
+                        specificity=0.9,
+                        has_condition=True,
+                        stated_explicitly=False,
+                    ),
                     position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
                 ]
             )
@@ -242,6 +250,66 @@ class TestGuards:
         )
         assert result.outcome == "ESCALATED"
         assert "never auto-resolved" in result.rationale
+
+
+class TestBlockingNeverAutoResolves:
+    """A BLOCKING conflict is one where correct code cannot be written without
+    deciding. Closing that on a heuristic defeats the gate it exists to raise.
+
+    Observed live on BERT/RoBERTa/ALBERT: batch_size 256 against 8000 was
+    auto-resolved to BERT's value because RoBERTa's had been flagged inferred,
+    discarding RoBERTa's central finding on an extraction artifact."""
+
+    @pytest.mark.parametrize(
+        "positions",
+        [
+            [
+                position("clm_aaaaaa", "p1", 0.0001, specificity=0.9, has_condition=True),
+                position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
+            ],
+            [
+                position("clm_aaaaaa", "p1", 0.0001, specificity=0.95),
+                position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
+            ],
+            [
+                position("clm_aaaaaa", "p1", 0.0001, specificity=0.5, is_primary=True),
+                position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
+            ],
+        ],
+        ids=["scoped", "specificity_gap", "primary_source"],
+    )
+    def test_no_rule_closes_a_blocking_conflict(self, engine, positions):
+        result = engine.resolve_one(contradiction(positions, severity="BLOCKING"))
+        assert result.outcome == "ESCALATED"
+        assert result.is_open
+
+    def test_the_rule_that_would_have_fired_is_still_recorded(self, engine):
+        """The reviewer should see what the policy would have chosen, and why."""
+        result = engine.resolve_one(
+            contradiction(
+                [
+                    position("clm_aaaaaa", "p1", 0.0001, specificity=0.9, has_condition=True),
+                    position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
+                ],
+                severity="BLOCKING",
+            )
+        )
+        assert result.rule_fired == "prefer_scoped_over_global"
+        assert "human" in result.rationale
+
+    def test_material_conflicts_still_auto_resolve(self, engine):
+        """The gate is on BLOCKING specifically, not on automation generally."""
+        result = engine.resolve_one(
+            contradiction(
+                [
+                    position("clm_aaaaaa", "p1", 0.0001, specificity=0.9, has_condition=True),
+                    position("clm_bbbbbb", "p2", 0.0003, specificity=0.5),
+                ],
+                severity="MATERIAL",
+            )
+        )
+        assert result.outcome == "SCOPED"
+        assert not result.is_open
 
 
 class TestDeterminism:
@@ -272,6 +340,7 @@ def contradictions(draw):
             is_primary=draw(st.booleans()),
             year=draw(st.one_of(st.none(), st.integers(min_value=1990, max_value=2030))),
             peer_reviewed=draw(st.booleans()),
+            has_condition=draw(st.booleans()),
             stated_explicitly=draw(st.booleans()),
         )
         for i in range(n)
@@ -325,6 +394,14 @@ class TestInvariants:
         if not result.is_open and result.selected_claim_id:
             chosen = next(p for p in contra.positions if p.claim_id == result.selected_claim_id)
             assert chosen.support.stated_explicitly
+
+    @settings(max_examples=300, deadline=None)
+    @given(contradictions())
+    def test_blocking_conflicts_never_auto_resolve(self, contra):
+        """Must hold across every rule, not only the ones tested by example."""
+        result = PolicyEngine(_SHARED_POLICY).resolve_one(contra)
+        if contra.severity == "BLOCKING":
+            assert result.is_open
 
     @settings(max_examples=200, deadline=None)
     @given(contradictions())

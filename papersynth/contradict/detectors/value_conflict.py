@@ -69,14 +69,14 @@ class ValueConflictDetector:
             return []
 
         out: list[Contradiction] = []
-        for condition, group in sorted(_group_by_condition(claims).items()):
-            contradiction = self._scan_condition(cluster, condition, group)
+        for (condition, unit), group in sorted(_group_by_scope(claims).items()):
+            contradiction = self._scan_condition(cluster, condition, unit, group)
             if contradiction is not None:
                 out.append(contradiction)
         return out
 
     def _scan_condition(
-        self, cluster: ConceptCluster, condition: str, claims: list[Claim]
+        self, cluster: ConceptCluster, condition: str, unit: str, claims: list[Claim]
     ) -> Contradiction | None:
         # A disagreement needs at least two papers. One paper stating two
         # values under one condition is an intra-paper inconsistency, which is
@@ -99,7 +99,15 @@ class ValueConflictDetector:
         severity = value_conflict_severity(values, cluster.canonical_name)
 
         scope = f" under {condition!r}" if condition else ""
+        if unit:
+            scope += f" (in {unit})"
         rendered = ", ".join(str(v) for v in values)
+        n_papers = len({p.paper_id for p in positions})
+        subject = (
+            f"{len(positions)} positions across {n_papers} papers"
+            if len(positions) != n_papers
+            else f"{n_papers} papers"
+        )
 
         return Contradiction(
             contradiction_id=ids.contradiction_id(
@@ -109,7 +117,7 @@ class ValueConflictDetector:
             type="VALUE_CONFLICT",
             severity=severity,
             description=(
-                f"{len(positions)} papers specify different values for "
+                f"{subject} specify different values for "
                 f"{cluster.canonical_name}{scope}: {rendered}."
             ),
             positions=positions,
@@ -117,10 +125,21 @@ class ValueConflictDetector:
         )
 
 
-def _group_by_condition(claims: list[Claim]) -> dict[str, list[Claim]]:
-    grouped: dict[str, list[Claim]] = defaultdict(list)
+def _group_by_scope(claims: list[Claim]) -> dict[tuple[str, str], list[Claim]]:
+    """Group by (condition, unit). Both must match before values are compared.
+
+    Unit matters as much as condition and was missed at first. BERT states its
+    batch size twice - 256 sequences and 128,000 words - which is one fact in
+    two units, since 256 x 512 = 128,000. Compared as bare numbers they look
+    like a stark disagreement, and the run reported it as BLOCKING.
+    """
+    grouped: dict[tuple[str, str], list[Claim]] = defaultdict(list)
     for claim in claims:
-        grouped[normalize_condition(claim.payload.get("condition"))].append(claim)
+        scope = (
+            normalize_condition(claim.payload.get("condition")),
+            normalize_condition(claim.payload.get("unit")),
+        )
+        grouped[scope].append(claim)
     return grouped
 
 
@@ -160,6 +179,7 @@ def _position(claim: Claim) -> Position:
         support=Support(
             specificity=specificity(payload),
             stated_explicitly=bool(payload.get("stated_explicitly", True)),
+            has_condition=bool(payload.get("condition")),
         ),
     )
 

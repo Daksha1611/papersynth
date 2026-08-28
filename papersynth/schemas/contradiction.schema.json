@@ -28,7 +28,8 @@
             "is_primary": { "type": "boolean" },
             "specificity": { "$ref": "common.schema.json#/$defs/confidence" },
             "peer_reviewed": { "type": "boolean" },
-            "stated_explicitly": { "type": "boolean" }
+            "stated_explicitly": { "type": "boolean" },
+            "has_condition": { "type": "boolean" }
           },
           "required": ["is_primary", "specificity"],
           "additionalProperties": false

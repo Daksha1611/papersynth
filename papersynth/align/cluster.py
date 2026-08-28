@@ -7,11 +7,22 @@ Splitting one concept in two just yields two singleton clusters and no
 contradiction - visible, recoverable, and harmless.
 
 So the primary key is the canonical name, which for hyperparameters is a
-strong and near-exact signal. Embeddings only propose merges between
-*differently named* claims, and only above the configured threshold. Until the
-SplitterAgent lands (P1), that conservatism is the only guard against a
-fabricated conflict list, and section 9 is explicit that a noisy conflict list
-gets abandoned by reviewers.
+strong and near-exact signal.
+
+Embedding-proposed merges are OFF by default, and that is an empirical finding
+rather than caution. On BERT/RoBERTa/ALBERT they fired five times and were
+wrong five times: num_steps merged with warmup_steps, and
+next_sentence_positive_ratio with next_sentence_negative_ratio. A
+bag-of-ngrams embedder scores those pairs highly because they share most of
+their characters, which is exactly the wrong signal - hyperparameter names are
+built by composing shared words, so surface similarity tracks naming
+convention rather than meaning. Two of the three contradictions that run
+reported were fabricated by these merges.
+
+They can be re-enabled once the SplitterAgent exists to reject a proposed merge
+(section 8.4), which is the gate the design always intended to sit behind them.
+Until then a false split costs a missed conflict, while a false merge invents
+one and burns the reviewer's trust in the whole list (section 9).
 """
 
 from __future__ import annotations
@@ -72,7 +83,7 @@ class Aligner:
         *,
         embedder: Embedder | None = None,
         threshold: float = 0.82,
-        embedding_merges: bool = True,
+        embedding_merges: bool = False,
     ) -> None:
         self.embedder = embedder or HashEmbedder()
         self.threshold = threshold

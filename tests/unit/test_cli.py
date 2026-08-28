@@ -6,6 +6,7 @@ Exit codes are part of the contract, not decoration: scripts/run.sh branches on
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -22,6 +23,15 @@ from e2e.test_mva_acceptance import scripted_provider
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "three_paper"
 runner = CliRunner()
+
+#: Rich decides on colour and wrapping from the environment, so raw CLI output
+#: is not a stable string to assert against.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(text: str) -> str:
+    """CLI output with colour and line wrapping removed."""
+    return " ".join(_ANSI.sub("", text).split())
 
 
 @pytest.fixture
@@ -55,23 +65,22 @@ class TestBasics:
     def test_version(self):
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "papersynth" in result.stdout
+        assert "papersynth" in plain(result.stdout)
 
     def test_validate_schemas(self):
         result = runner.invoke(app, ["validate-schemas"])
         assert result.exit_code == 0
-        assert "schemas valid" in result.stdout
+        assert "schemas valid" in plain(result.stdout)
 
     def test_extractors_lists_the_registry(self):
         result = runner.invoke(app, ["extractors"])
         assert result.exit_code == 0
-        assert "hyperparameter" in result.stdout
+        assert "hyperparameter" in plain(result.stdout)
 
     def test_a_non_run_directory_fails_clearly(self, tmp_path):
         result = runner.invoke(app, ["conflicts", str(tmp_path)])
         assert result.exit_code == 1
-        # Rich wraps to the terminal width, so collapse before matching.
-        assert "not a PaperSynth run directory" in " ".join(result.output.split())
+        assert "not a PaperSynth run directory" in plain(result.output)
 
     def test_ingest_requires_a_source(self):
         result = runner.invoke(app, ["ingest"])
@@ -83,7 +92,7 @@ class TestConflicts:
         """scripts/run.sh relies on this to refuse to emit."""
         result = runner.invoke(app, ["conflicts", str(run_dir), "--status", "open"])
         assert result.exit_code == 2
-        assert "VALUE_CONFLICT" in result.stdout
+        assert "VALUE_CONFLICT" in plain(result.stdout)
 
     def test_quiet_prints_nothing(self, run_dir):
         result = runner.invoke(app, ["conflicts", str(run_dir), "--quiet"])
@@ -98,14 +107,14 @@ class TestConflicts:
 
     def test_positions_show_provenance(self, run_dir):
         result = runner.invoke(app, ["conflicts", str(run_dir)])
-        assert "paper_a" in result.stdout and "paper_b" in result.stdout
-        assert "specificity" in result.stdout
+        assert "paper_a" in plain(result.stdout) and "paper_b" in plain(result.stdout)
+        assert "specificity" in plain(result.stdout)
 
     def test_the_fallback_verdict_is_not_stuttered(self, run_dir):
         """rule_fired is None exactly when the fallback applied, and the
         rationale already says so."""
         result = runner.invoke(app, ["conflicts", str(run_dir)])
-        assert "no rule fired - no rule fired" not in result.stdout
+        assert "no rule fired - no rule fired" not in plain(result.stdout)
 
 
 class TestResolveFlow:
@@ -127,7 +136,7 @@ class TestResolveFlow:
             app, ["resolve", str(run_dir), conflict_id, "--select", "clm_zzzzzz"]
         )
         assert result.exit_code == 2
-        assert "not a position" in result.output
+        assert "not a position" in plain(result.output)
 
     def test_an_unknown_contradiction_is_rejected(self, run_dir):
         result = runner.invoke(app, ["resolve", str(run_dir), "ctr_nope", "--select", "clm_aaaaaa"])
@@ -213,28 +222,28 @@ class TestGapsAndCost:
     def test_gaps_are_listed(self, run_dir):
         result = runner.invoke(app, ["gaps", str(run_dir)])
         assert result.exit_code == 0
-        assert "optimizer" in result.stdout
+        assert "optimizer" in plain(result.stdout)
 
     def test_gaps_output_does_not_overclaim(self, run_dir):
         result = runner.invoke(app, ["gaps", str(run_dir)])
-        assert "no verified claim" in result.stdout.lower()
+        assert "no verified claim" in plain(result.stdout).lower()
 
     def test_cost_reports_zero_on_the_free_chain(self, run_dir):
         result = runner.invoke(app, ["cost", str(run_dir)])
         assert result.exit_code == 0
-        assert "$0.00" in result.stdout
+        assert "$0.00" in plain(result.stdout)
 
 
 class TestSpecCommand:
     def test_spec_prints_yaml(self, run_dir):
         result = runner.invoke(app, ["spec", str(run_dir)])
         assert result.exit_code == 0
-        assert "spec_version" in result.stdout
+        assert "spec_version" in plain(result.stdout)
 
     def test_spec_json_format(self, run_dir):
         result = runner.invoke(app, ["spec", str(run_dir), "--format", "json"])
         assert result.exit_code == 0
-        assert "spec_version" in result.stdout
+        assert "spec_version" in plain(result.stdout)
 
     def test_rebuild_reproduces_the_same_spec(self, run_dir):
         """Rebuilding from artifacts must not drift from what the run emitted."""
