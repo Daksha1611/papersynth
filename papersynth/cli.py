@@ -151,6 +151,13 @@ def run(
             help="Also align differently-named claims by similarity. Needs --split-gate.",
         ),
     ] = False,
+    adversarial_gaps: Annotated[
+        bool,
+        typer.Option(
+            "--adversarial-gaps",
+            help="Ask an implementer what they would have to guess. One extra call.",
+        ),
+    ] = False,
     no_grobid: Annotated[bool, typer.Option("--no-grobid", help="Allow pdftotext only.")] = False,
 ) -> None:
     """Run the full pipeline over a set of papers."""
@@ -198,6 +205,7 @@ def run(
         entailment=not no_entailment,
         split_gate=split_gate or embedding_merges,
         embedding_merges=embedding_merges,
+        adversarial_gaps=adversarial_gaps,
         ledger=ledger,
     )
 

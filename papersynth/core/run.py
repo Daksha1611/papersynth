@@ -34,7 +34,7 @@ from papersynth.core.models import (
     utcnow,
 )
 from papersynth.extract import registry
-from papersynth.gapcheck import Checklist
+from papersynth.gapcheck import AdversarialGapAgent, Checklist
 from papersynth.llm.base import LLMProvider
 from papersynth.reconcile import Policy, PolicyEngine
 from papersynth.synth import SpecBuilder, SpecValidator, render_review
@@ -61,6 +61,9 @@ class RunResult:
     reconciliation: ReconciliationResult | None = None
     gaps: list[Gap] = field(default_factory=list)
     reports: list[VerificationReport] = field(default_factory=list)
+    #: Canonical names carrying an unresolved conflict. A disputed value is not
+    #: a missing one, and reporting it as both doubles the review list.
+    disputed_fields: set[str] = field(default_factory=set)
     spec: dict[str, Any] | None = None
     blocking: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -128,6 +131,7 @@ class Pipeline:
         entailment: bool = True,
         split_gate: bool = False,
         embedding_merges: bool = False,
+        adversarial_gaps: bool = False,
         ledger: Ledger | None = None,
     ) -> None:
         self.settings = settings or get_settings()
@@ -148,6 +152,10 @@ class Pipeline:
         #: proposals including num_steps merged with warmup_steps.
         self.split_gate = split_gate
         self.embedding_merges = embedding_merges
+        #: Pass B. One call, run against the assembled spec rather than the
+        #: papers, so the questions it raises are ones a real implementer would
+        #: actually face.
+        self.adversarial_gaps = adversarial_gaps
         self.ledger = ledger or Ledger()
 
     def run(
@@ -181,6 +189,11 @@ class Pipeline:
             self.workspace.write_json("03_concept_graph.json", graph.model_dump())
 
         result.contradictions = self._detect(graph, documents)
+        result.disputed_fields = {
+            cluster.canonical_name
+            for cluster in graph.clusters
+            if any(c.cluster_id == cluster.cluster_id for c in result.contradictions)
+        }
         if self.workspace:
             self.workspace.write_yaml(
                 "04_contradictions.yaml",
@@ -285,13 +298,28 @@ class Pipeline:
             documents=result.documents,
             claims=result.claims,
         )
-        spec = builder.build(
-            contradictions=result.contradictions,
-            reconciliation=result.reconciliation,
-            gaps=result.gaps,
-            reports=result.reports,
-            reviewer=reviewer,
-        )
+
+        def assemble() -> dict[str, Any]:
+            return builder.build(
+                contradictions=result.contradictions,
+                reconciliation=result.reconciliation,
+                gaps=result.gaps,
+                reports=result.reports,
+                reviewer=reviewer,
+            )
+
+        spec = assemble()
+
+        if self.adversarial_gaps:
+            # Pass B needs the assembled spec, which only exists at stage 7, so
+            # the spec is built once for the audit and rebuilt with whatever it
+            # finds. Assembly costs no model calls, so the second build is free.
+            found = self._adversarial_pass(spec, result)
+            if found:
+                result.gaps.extend(found)
+                if self.workspace:
+                    self.workspace.write_yaml("06_gaps.yaml", [g.model_dump() for g in result.gaps])
+                spec = assemble()
 
         validator = SpecValidator(result.claims)
         report = validator.validate(
@@ -321,6 +349,25 @@ class Pipeline:
             else:
                 report.raise_first()
                 self.workspace.write_yaml("implementation_spec.yaml", spec)
+
+    def _adversarial_pass(self, spec: dict[str, Any], result: RunResult) -> list[Gap]:
+        """Ask what an implementer would have to guess. Never fatal.
+
+        A failed audit costs the gaps this pass would have found; aborting the
+        run would cost the whole spec, including the gaps Pass A already found
+        and every claim behind them.
+        """
+        try:
+            return AdversarialGapAgent(self.provider).audit(
+                spec,
+                claims=list(result.claims.values()),
+                existing=result.gaps,
+                disputed=result.disputed_fields,
+                paper_ids=[d.paper_id for d in result.documents],
+            )
+        except PaperSynthError as exc:
+            result.warnings.append(f"adversarial gap pass failed: {exc}")
+            return []
 
     def _write_manifest(self, documents: list[StructuredDocument], objective: str) -> None:
         if not self.workspace:

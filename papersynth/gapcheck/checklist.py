@@ -157,9 +157,15 @@ def _present_fields(claims: list[Claim]) -> set[str]:
     for claim in claims:
         if claim.status != "verified":
             continue
-        name = claim.payload.get("canonical_name")
-        if isinstance(name, str) and name:
-            present.add(name)
+        # A method claim names its field in sub_problem rather than
+        # canonical_name. Reading only the latter meant the checklist could not
+        # see design decisions at all, so `optimizer` was reported as missing
+        # while two papers were actively disagreeing about which one to use -
+        # the same field listed as absent and as contested at once.
+        for field_name in ("canonical_name", "sub_problem"):
+            value = claim.payload.get(field_name)
+            if isinstance(value, str) and value:
+                present.add(value)
     return present
 
 

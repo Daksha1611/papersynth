@@ -69,6 +69,41 @@ class TestChecklistAudit:
         )
         assert "learning_rate" in fields(gaps)
 
+    def test_a_method_claim_counts_as_coverage(self, checklist):
+        """A design decision names its field in sub_problem. Reading only
+        canonical_name reported `optimizer` as missing while two papers were
+        actively disagreeing about which one to use."""
+        from papersynth.core import ids
+        from papersynth.core.models import Claim, Provenance
+
+        claim = Claim.build(
+            paper_id="p1",
+            claim_type="method",
+            provenance=Provenance(
+                paper_id="p1",
+                span_id="p1#s1.p0.0",
+                section="Method",
+                page=1,
+                char_start=0,
+                char_end=10,
+                quote_hash=ids.quote_hash("x"),
+                extraction_method="llm",
+                extractor_version="method@1.0.0",
+                confidence=0.9,
+            ),
+            payload={
+                "sub_problem": "optimizer",
+                "approach": "Adam",
+                "adopted": True,
+                "attribution": "own",
+                "stated_explicitly": True,
+            },
+        )
+        claim.status = "verified"
+
+        gaps = checklist.audit([claim, *claims(("dropout", 0.1))], paper_ids=["p1"])
+        assert "optimizer" not in fields(gaps)
+
     def test_an_inapplicable_group_raises_no_gaps(self, checklist):
         """A corpus describing no training must not be asked for a batch size."""
         gaps = checklist.audit([], paper_ids=["paper_a"])
