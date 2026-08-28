@@ -21,10 +21,11 @@ from rich.table import Table
 
 import papersynth
 from papersynth.core.config import ProviderId, get_settings
-from papersynth.core.errors import PaperSynthError
+from papersynth.core.errors import AllProvidersExhausted, PaperSynthError
 from papersynth.core.ledger import Ledger
 from papersynth.core.models import Resolution, utcnow
 from papersynth.core.run import Pipeline, Workspace
+from papersynth.llm.stub import StubProvider
 from papersynth.schemas import SCHEMA_DIR, load_schema, validator_for
 from papersynth.store import RunStore
 from papersynth.synth import SpecBuilder, SpecValidator, render_review
@@ -220,13 +221,31 @@ def run(
         raise typer.Exit(2)
 
 
+def _gap_breakdown(gaps: list[Any]) -> str:
+    """Total plus a split by criticality.
+
+    A bare count says nothing about whether a reviewer must act now. Nine gaps
+    that are all cosmetic and nine that all block are the same number and
+    completely different situations.
+    """
+    if not gaps:
+        return "0"
+    counts: dict[str, int] = {}
+    for gap in gaps:
+        counts[gap.criticality] = counts.get(gap.criticality, 0) + 1
+    parts = [
+        f"{counts[k]} {k.lower()}" for k in ("BLOCKING", "MATERIAL", "COSMETIC") if k in counts
+    ]
+    return f"{len(gaps)}  ({', '.join(parts)})"
+
+
 def _print_run_summary(result: Any, root: Path) -> None:
     console.print()
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_row("claims", str(len(result.claims)))
     table.add_row("contradictions", str(len(result.contradictions)))
     table.add_row("open conflicts", str(len(result.open_conflicts)))
-    table.add_row("gaps", str(len(result.gaps)))
+    table.add_row("gaps", _gap_breakdown(result.gaps))
     table.add_row("provenance", f"{result.provenance_completeness:.0%}")
     console.print(table)
 
@@ -646,6 +665,51 @@ def models(
         err.print(
             f"[yellow]The configured model {configured!r} is not in this list. "
             "A run would fail with model-not-found.[/yellow]"
+        )
+
+
+@app.command("eval-gaps")
+def eval_gaps(
+    adversarial: Annotated[
+        bool, typer.Option("--adversarial/--checklist-only", help="Include Pass B.")
+    ] = True,
+) -> None:
+    """Measure gap recall by ablation, and false positives on a complete spec.
+
+    Recall is self-labelling: delete a field, check the gap appears. False
+    positives are counted on the untouched spec, where zero is correct - a
+    noisy gap list gets skimmed and then ignored, at which point the real
+    entries are invisible too.
+    """
+    from papersynth.eval import evaluate_gaps
+    from papersynth.llm import build_router
+
+    settings = get_settings()
+    try:
+        provider = build_router(settings) if adversarial else StubProvider([])
+    except PaperSynthError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    try:
+        report = evaluate_gaps(provider, adversarial=adversarial)
+    except AllProvidersExhausted as exc:
+        # Expected on a day of heavy use, and not a failure of the harness.
+        # The traceback this used to print buried that.
+        err.print(f"[yellow]{exc}[/yellow]")
+        err.print(
+            "[dim]Run with --checklist-only to measure Pass A alone, which needs no provider.[/dim]"
+        )
+        raise typer.Exit(3) from exc
+
+    console.print(report.render())
+
+    for note in report.notes:
+        console.print(f"[dim]  {note}[/dim]")
+
+    if report.recall < 0.80:
+        err.print(
+            f"[yellow]recall {report.recall:.2f} is below the 0.80 target (section 13.1)[/yellow]"
         )
 
 

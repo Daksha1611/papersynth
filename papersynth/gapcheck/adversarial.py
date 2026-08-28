@@ -19,6 +19,7 @@ nothing from it at all.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from rapidfuzz import fuzz
@@ -103,17 +104,20 @@ class AdversarialGapAgent:
             if c.status == "verified"
         }
         supplied.discard("")
-        known = [g.field for g in existing]
         contested = list(disputed or ())
 
         out: list[Gap] = []
         seen: set[str] = set()
+        #: gap_id -> the better question Pass B wrote for a gap Pass A found.
+        merged: dict[str, str] = {}
 
         for entry in payload.get("gaps") or []:
             if not isinstance(entry, dict):
                 continue
             field = _normalize(entry.get("field"))
-            question = str(entry.get("question", "")).strip()
+            # Strip before the emptiness check: a gap whose entire text is a
+            # proposed answer has nothing left to ask and is dropped.
+            question = strip_suggestion(str(entry.get("question", "")))
             if not field or not question or field in seen:
                 continue
 
@@ -121,7 +125,12 @@ class AdversarialGapAgent:
             # asked to find problems will find some that are not there.
             if _matches_any(field, supplied):
                 continue
-            if _matches_any(field, known):
+            # Pass A found this too. Merging rather than dropping keeps Pass
+            # A's criticality, which comes from config a human wrote, and Pass
+            # B's phrasing, which names the specific thing that is missing.
+            duplicate = _matching_gap(field, existing)
+            if duplicate is not None:
+                merged[duplicate.gap_id] = question
                 continue
 
             # The papers answer this, they just answer it differently. That is
@@ -138,7 +147,7 @@ class AdversarialGapAgent:
                     gap_id=ids.gap_id(None, field),
                     component_id=None,
                     field=field,
-                    question=question + (f" Blocks: {blocks}" if blocks else ""),
+                    question=strip_suggestion(question) + (f" Blocks: {blocks}" if blocks else ""),
                     criticality=_criticality(entry.get("criticality")),
                     searched_papers=sorted(paper_ids),
                     suggested_sources=[
@@ -147,6 +156,12 @@ class AdversarialGapAgent:
                     ],
                 )
             )
+
+        for gap in existing:
+            better = merged.get(gap.gap_id)
+            if better:
+                gap.question = better
+
         return out
 
 
@@ -191,6 +206,52 @@ def render_spec(spec: dict[str, Any]) -> str:
     return "\n".join(lines).strip() or "(the specification is empty)"
 
 
+#: Clauses proposing an answer rather than asking a question. ER-02 forbids a
+#: value the papers do not state, and a gap carrying "probably Xavier" is the
+#: exact shape that gets implemented as fact by a coding agent reading quickly.
+_SUGGESTION = re.compile(
+    r"\b(?:probably|likely|presumably|most likely|we (?:suggest|recommend)|"
+    r"I would (?:use|suggest|recommend)|you (?:should|could) use|"
+    r"recommend(?:ed)?|suggest(?:ed)?|default(?:s)? to|assume|"
+    r"a reasonable (?:default|choice)|commonly)\b",
+    re.IGNORECASE,
+)
+
+_SENTENCE = re.compile(r"(?<=[.?!])\s+")
+
+
+def strip_suggestion(question: str) -> str:
+    """Remove any proposed answer, keeping only what is being asked.
+
+    A Gap records a question. The moment it also records a guess, a coding
+    agent reading quickly implements the guess - which is precisely the failure
+    the whole gap mechanism exists to prevent (ER-02).
+
+    Context that explains why the question matters is kept. "Adam and SGD give
+    materially different dynamics" tells a reviewer what is at stake without
+    answering anything; "probably Adam" answers it.
+    """
+    sentences = [s for s in _SENTENCE.split(question.strip()) if s.strip()]
+    kept = [s for s in sentences if not _SUGGESTION.search(s)]
+
+    if kept:
+        return " ".join(kept).strip()
+
+    # Nothing survived: every sentence proposed an answer. Returning a
+    # scrubbed version would still carry the value - "probably use a batch
+    # size of 256?" only loses the word "probably" - so the caller drops it.
+    # A gap that merely suggests a number is not a gap, and letting it through
+    # is how a coding agent ends up implementing a guess as fact.
+    return ""
+
+
+def _matching_gap(field: str, existing: list[Gap]) -> Gap | None:
+    for gap in existing:
+        if _matches_any(field, [gap.field]):
+            return gap
+    return None
+
+
 def _normalize(field: Any) -> str:
     text = str(field or "").strip().lower()
     return "".join(ch if ch.isalnum() else "_" for ch in text).strip("_")
@@ -217,10 +278,45 @@ def _matches_any(field: str, candidates: list[str] | set[str], *, text: str = ""
         needle = candidate.replace("_", " ").lower()
         if fuzz.token_set_ratio(spaced, needle) >= DUPLICATE_RATIO:
             return True
+        if _abbreviates(spaced, needle):
+            return True
         # A question naming the disputed quantity is restating the conflict.
         if text and needle in haystack:
             return True
     return False
+
+
+#: Shortest prefix accepted as an abbreviation. Below this, "num" would
+#: abbreviate "number", "numerator" and "numeric" alike.
+_MIN_ABBREVIATION = 4
+
+
+def _abbreviates(left: str, right: str) -> bool:
+    """Whether one name is the other with words abbreviated.
+
+    Token similarity cannot see this. "weight init scheme" against "weight
+    initialization" scores 56, which is BELOW "num steps" against "num epochs"
+    at 74 - and those two are genuinely different quantities that must never
+    merge. No threshold separates them, so abbreviation needs its own rule.
+
+    Every token of the shorter name must have a partner in the longer one that
+    it shares a prefix with. Extra qualifiers on the longer name are ignored,
+    which is what lets "weight init scheme" absorb "weight initialization"
+    while "num steps" and "num epochs" stay apart on their second token.
+    """
+    a, b = left.split(), right.split()
+    if not a or not b:
+        return False
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+
+    return all(any(_prefix_match(token, other) for other in longer) for token in shorter)
+
+
+def _prefix_match(token: str, other: str) -> bool:
+    if token == other:
+        return True
+    short, long_ = (token, other) if len(token) <= len(other) else (other, token)
+    return len(short) >= _MIN_ABBREVIATION and long_.startswith(short)
 
 
 def _criticality(value: Any) -> Criticality:

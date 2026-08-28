@@ -47,6 +47,24 @@ class SpecBuilder:
         self.documents = documents
         self.claims = claims
 
+    def build_draft(self, **kwargs: Any) -> dict[str, Any]:
+        """Assemble a spec for auditing, without emission gates.
+
+        Deliberately a delegation rather than a second assembly path. Pass B
+        audits this draft and reports gaps against it, so if the draft were
+        built by different code than the spec that ships, the gaps could
+        describe an artifact nobody receives.
+
+        There is nothing to disable here: this builder never validates. The
+        BLOCKING-conflict check, provenance closure and schema validation all
+        live in SpecValidator and run only on the final emission. Keeping
+        assembly and gating in separate objects is what makes the draft
+        structurally identical to the emitted spec by construction rather than
+        by discipline - and `test_draft_and_final_are_identical` fails if that
+        ever stops being true.
+        """
+        return self.build(**kwargs)
+
     def build(
         self,
         *,
