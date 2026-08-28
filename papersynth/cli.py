@@ -686,6 +686,7 @@ def _rebuild(store: RunStore, loaded: Any, *, reviewer: str | None = None) -> No
         contradictions=loaded.contradictions,
         reconciliation=loaded.reconciliation,
         gaps=loaded.gaps,
+        reports=loaded.reports,
         reviewer=reviewer,
     )
 

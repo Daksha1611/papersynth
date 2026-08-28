@@ -28,6 +28,7 @@ from papersynth.core.models import (
     Gap,
     ReconciliationResult,
 )
+from papersynth.verify import VerificationReport
 
 
 @dataclass
@@ -42,6 +43,7 @@ class LoadedRun:
     contradictions: list[Contradiction] = field(default_factory=list)
     reconciliation: ReconciliationResult | None = None
     gaps: list[Gap] = field(default_factory=list)
+    reports: list[VerificationReport] = field(default_factory=list)
     spec: dict[str, Any] | None = None
 
     @property
@@ -124,6 +126,12 @@ class RunStore:
         run.gaps = [
             Gap.model_validate(entry) for entry in (_read_yaml(self.root / "06_gaps.yaml") or [])
         ]
+
+        for entry in _read_json(self.root / "02_verified" / "verification_report.json") or []:
+            try:
+                run.reports.append(VerificationReport(**entry))
+            except TypeError:
+                continue
 
         for name in ("implementation_spec.yaml", "implementation_spec.draft.yaml"):
             spec = _read_yaml(self.root / name)

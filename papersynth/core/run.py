@@ -12,7 +12,7 @@ of three papers with that fact stated is more useful than no spec at all.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +216,17 @@ class Pipeline:
                 self.workspace.write_yaml(
                     f"02_verified/{_safe(doc.paper_id)}.yaml", verified.model_dump()
                 )
+
+        if self.workspace:
+            # Named in section 4.3 and previously never written. Without it a
+            # rebuilt spec reported zero claims examined while simultaneously
+            # listing fifty-two contributed - two contradictory counts in the
+            # deliverable, from the artifact that was missing rather than from
+            # any disagreement in the data.
+            self.workspace.write_json(
+                "02_verified/verification_report.json",
+                [asdict(r) for r in result.reports],
+            )
         return verified_sets
 
     def _detect(self, graph: Any, documents: list[StructuredDocument]) -> list[Contradiction]:
