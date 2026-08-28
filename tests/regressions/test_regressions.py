@@ -9,6 +9,8 @@ ground incidentally, but incidental coverage is not a guarantee.
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from papersynth.core.models import (
     Claim,
@@ -455,3 +457,163 @@ class TestR006TexEscapesSurvivedIntoText:
         )
         assert "bold claim" in doc.full_text
         assert "{" not in doc.full_text
+
+
+class TestR009OneOfAblatedIndividually:
+    """The ablation harness scored a one_of requirement as a miss. Deleting
+    num_steps while num_epochs remained proved nothing - the requirement was
+    genuinely still satisfied - so the harness was marking correct behaviour as
+    failure and would have pushed the checklist the wrong way to 'fix' it.
+
+    A harness that reports a false miss is worse than no harness: it produces
+    a number that looks like evidence and points the wrong direction."""
+
+    def test_a_one_of_group_ablates_together(self):
+        from papersynth.eval import ABLATABLE_FIELDS
+
+        entry = next(e for e in ABLATABLE_FIELDS if e[0] == "num_steps_or_epochs")
+        assert set(entry[1]) == {"num_steps", "num_epochs"}
+
+    def test_deleting_one_alternative_raises_no_gap(self):
+        """Because the requirement is still met. This is correct behaviour."""
+        from papersynth.eval import COMPLETE_SPEC, ablate
+        from papersynth.eval.gap_ablation import claims_for
+        from papersynth.gapcheck import Checklist
+
+        checklist = Checklist.load("config/implementability_checklist.yaml")
+        ablated = ablate(COMPLETE_SPEC, "num_steps")
+        gaps = checklist.audit(claims_for(ablated), paper_ids=["p1"])
+
+        assert "num_steps_or_epochs" not in {g.field for g in gaps}
+
+    def test_deleting_both_alternatives_raises_the_gap(self):
+        from papersynth.eval import COMPLETE_SPEC, ablate
+        from papersynth.eval.gap_ablation import claims_for
+        from papersynth.gapcheck import Checklist
+
+        checklist = Checklist.load("config/implementability_checklist.yaml")
+        ablated = ablate(COMPLETE_SPEC, "num_steps", "num_epochs")
+        gaps = checklist.audit(claims_for(ablated), paper_ids=["p1"])
+
+        assert "num_steps_or_epochs" in {g.field for g in gaps}
+
+    def test_pass_a_scores_a_clean_sweep(self):
+        """With the harness corrected, the deterministic pass has nothing to
+        excuse: every ablated field recovered, nothing invented."""
+        from papersynth.eval import evaluate_gaps
+        from papersynth.llm.stub import StubProvider
+
+        report = evaluate_gaps(StubProvider([]), adversarial=False)
+        assert report.recall == 1.0, report.render()
+        assert report.false_positive_count == 0, report.render()
+
+
+class TestR010GapNameMerging:
+    """Gap names that abbreviate each other must merge; names that merely look
+    alike must not. Token similarity cannot tell these apart: "weight init
+    scheme" against "weight initialization" scores 56, BELOW "num steps"
+    against "num epochs" at 74 - and those two are different quantities. No
+    threshold separates them, which is why the prefix rule exists."""
+
+    @pytest.mark.parametrize(
+        ("left", "right"),
+        [
+            ("weight_init_scheme", "weight_initialization"),
+            ("lr", "lr_schedule"),
+            ("wd_value", "wd"),
+            ("bs", "bs_per_device"),
+            ("learning_rate_peak", "learning_rate"),
+            ("tokenizer_type", "tokenizer"),
+            ("dropout", "dropout_rate"),
+            ("optim_algorithm", "optimizer_algorithm"),
+            # Spelling variants: one substitution in a same-length word.
+            ("weight_initialisation", "weight_initialization"),
+            ("optimiser", "optimizer"),
+            ("normalisation_type", "normalization_type"),
+        ],
+    )
+    def test_these_merge(self, left, right):
+        from papersynth.gapcheck.adversarial import _matches_any
+
+        assert _matches_any(left, [right]), f"{left} should merge with {right}"
+
+    @pytest.mark.parametrize(
+        ("left", "right"),
+        [
+            ("num_steps", "num_epochs"),
+            ("max_len", "min_len"),
+            ("num_heads", "num_layers"),
+            ("weight_decay", "weight_initialization"),
+            ("input_dim", "output_dim"),
+            ("train_batch_size", "eval_batch_size"),
+            ("encoder_layers", "decoder_layers"),
+            # Two substitutions, not one - and opposites.
+            ("max_pool", "avg_pool"),
+        ],
+    )
+    def test_these_stay_separate(self, left, right):
+        from papersynth.gapcheck.adversarial import _matches_any
+
+        assert not _matches_any(left, [right]), f"{left} must not merge with {right}"
+
+    def test_short_tokens_do_not_abbreviate(self):
+        """Below four characters "num" would abbreviate number, numerator and
+        numeric alike."""
+        from papersynth.gapcheck.adversarial import _abbreviates
+
+        assert not _abbreviates("num thing", "numerator thing")
+
+    @settings(max_examples=200, deadline=None)
+    @given(
+        st.lists(
+            st.sampled_from(["weight", "learning", "batch", "num", "max", "min"]),
+            min_size=1,
+            max_size=3,
+        ),
+        st.lists(
+            st.sampled_from(["decay", "rate", "size", "steps", "epochs", "layers"]),
+            min_size=1,
+            max_size=2,
+        ),
+    )
+    def test_distinct_tails_never_merge(self, heads, tails):
+        """A tuned constant that passes two examples breaks on the third, so
+        the invariant is checked over generated names: two field names sharing
+        a prefix but ending in unrelated words are different fields."""
+        from papersynth.gapcheck.adversarial import _matches_any
+
+        head = " ".join(heads)
+        for first in tails:
+            for second in tails:
+                if first == second or first.startswith(second) or second.startswith(first):
+                    continue
+                assert not _matches_any(
+                    f"{head} {first}".replace(" ", "_"),
+                    [f"{head} {second}".replace(" ", "_")],
+                ), f"{head} {first} must not merge with {head} {second}"
+
+    @settings(max_examples=100, deadline=None)
+    @given(st.sampled_from(["initialization", "accumulation", "normalization", "regularization"]))
+    def test_a_genuine_abbreviation_always_merges(self, word):
+        """Truncating a long word is the case the rule exists for."""
+        from papersynth.gapcheck.adversarial import _matches_any
+
+        assert _matches_any(f"weight_{word[:4]}", [f"weight_{word}"])
+
+    def test_a_spelling_rule_is_exact_not_thresholded(self):
+        """Similarity scores put "initialisation"/"initialization" at 93 and
+        "encoder"/"decoder" at 86. Any constant separating those sits in a
+        two-point band, and the next pair lands in it. Counting edits is
+        exact: spelling pairs differ by one character, opposites by two."""
+        from papersynth.gapcheck.adversarial import _spelling_variant
+
+        assert _spelling_variant("initialisation", "initialization")
+        assert not _spelling_variant("encoder", "decoder")
+        assert not _spelling_variant("max", "min"), "too short to be a spelling difference"
+        assert not _spelling_variant("init", "initialization"), "different lengths"
+
+    def test_merging_is_symmetric(self):
+        from papersynth.gapcheck.adversarial import _matches_any
+
+        assert _matches_any("weight_init", ["weight_initialization"])
+        assert _matches_any("weight_initialization", ["weight_init"])

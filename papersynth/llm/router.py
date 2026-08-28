@@ -111,7 +111,26 @@ class FallbackRouter:
                 return cached
 
             if self.usage.likely_exhausted(provider.provider_id):
+                # Section 6.4.3 promises the ledger explains which provider
+                # served each call. A provider skipped without a 429 used to
+                # leave no trace at all, so a call appearing on the second leg
+                # looked unexplained - the first leg had simply been passed
+                # over silently.
                 skipped.append(provider.provider_id)
+                self.ledger.record(
+                    stage=stage,
+                    call_id=cache_key[:12],
+                    provider_id=provider.provider_id,
+                    model=provider.model,
+                    prompt_hash=cache_key,
+                    input_tokens=0,
+                    output_tokens=0,
+                    cost_usd=0.0,
+                    latency_ms=0.0,
+                    paper_id=paper_id,
+                    extractor=extractor,
+                    error="skipped: known exhausted for today",
+                )
                 continue
 
             if first_attempted is None:

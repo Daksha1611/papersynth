@@ -152,7 +152,8 @@ class AllProvidersExhausted(ProviderError):
         self.last_error = last_error
         super().__init__(
             "All providers in the chain are exhausted. "
-            "Resume with `papersynth run --resume <run>` once quotas reset."
+            "Re-run the same command with --resume once quotas reset; papers "
+            "already extracted are reused rather than re-fetched."
             + (f" Last error: {last_error}" if last_error else "")
         )
 

@@ -132,6 +132,7 @@ class Pipeline:
         split_gate: bool = False,
         embedding_merges: bool = False,
         adversarial_gaps: bool = False,
+        resume: bool = False,
         ledger: Ledger | None = None,
     ) -> None:
         self.settings = settings or get_settings()
@@ -156,6 +157,11 @@ class Pipeline:
         #: papers, so the questions it raises are ones a real implementer would
         #: actually face.
         self.adversarial_gaps = adversarial_gaps
+        #: Reuse per-paper artifacts already on disk (FR-15, NFR-05). Extract
+        #: and verify are where a run's calls actually go, so skipping papers
+        #: already done is what makes a resumed run affordable rather than a
+        #: second full run.
+        self.resume = resume
         self.ledger = ledger or Ledger()
 
     def run(
@@ -226,6 +232,20 @@ class Pipeline:
 
         verified_sets: list[ClaimSet] = []
         for doc in documents:
+            done = self._resume_paper(doc)
+            if done is not None:
+                verified_sets.append(done)
+                result.reports.append(
+                    VerificationReport(
+                        paper_id=doc.paper_id,
+                        total=len(done.claims),
+                        verified=len(done.verified),
+                        rejected=len(done.rejected),
+                    )
+                )
+                result.warnings.append(f"{doc.paper_id}: reused verified claims from disk")
+                continue
+
             try:
                 extraction = registry.run_all(doc, extractors)
             except PaperSynthError as exc:
@@ -260,6 +280,34 @@ class Pipeline:
                 [asdict(r) for r in result.reports],
             )
         return verified_sets
+
+    def _resume_paper(self, doc: StructuredDocument) -> ClaimSet | None:
+        """Verified claims for this paper from a previous run, if any.
+
+        Resumption is per paper rather than per stage because that is where
+        the granularity actually helps: a run interrupted by exhausted quotas
+        has some papers fully extracted and verified, and others untouched.
+        The corpus stages downstream are rerun regardless, since they are
+        cheap next to extraction and depend on the full claim set.
+
+        A partially written or unreadable artifact is treated as absent. Doing
+        the work again costs calls; trusting a truncated file would put
+        half a paper's claims into the spec and call it complete.
+        """
+        if not self.resume or self.workspace is None:
+            return None
+
+        path = self.workspace.root / "02_verified" / f"{_safe(doc.paper_id)}.yaml"
+        if not path.exists():
+            return None
+
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            claim_set = ClaimSet.model_validate(payload)
+        except (yaml.YAMLError, ValueError, OSError):
+            return None
+
+        return claim_set if claim_set.claims else None
 
     def _detect(self, graph: Any, documents: list[StructuredDocument]) -> list[Contradiction]:
         metadata = {d.paper_id: (d.venue, d.year) for d in documents}

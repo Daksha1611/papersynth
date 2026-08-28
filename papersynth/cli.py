@@ -159,6 +159,13 @@ def run(
             help="Ask an implementer what they would have to guess. One extra call.",
         ),
     ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option(
+            "--resume",
+            help="Reuse per-paper artifacts already in --out. Use after quotas reset.",
+        ),
+    ] = False,
     no_grobid: Annotated[bool, typer.Option("--no-grobid", help="Allow pdftotext only.")] = False,
 ) -> None:
     """Run the full pipeline over a set of papers."""
@@ -207,6 +214,7 @@ def run(
         split_gate=split_gate or embedding_merges,
         embedding_merges=embedding_merges,
         adversarial_gaps=adversarial_gaps,
+        resume=resume,
         ledger=ledger,
     )
 

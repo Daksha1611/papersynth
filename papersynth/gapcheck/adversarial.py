@@ -22,8 +22,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from rapidfuzz import fuzz
-
 from papersynth.core import ids
 from papersynth.core.models import Claim, Criticality, Gap
 from papersynth.llm.base import LLMProvider
@@ -260,30 +258,63 @@ def _normalize(field: Any) -> str:
 def _matches_any(field: str, candidates: list[str] | set[str], *, text: str = "") -> bool:
     """Whether `field` names the same thing as any candidate.
 
-    Underscores become spaces first, so token-set similarity can actually see
-    the words. Compared as single tokens, "tokenizer_type" and "tokenizer"
-    scored below threshold and a contested tokenizer choice was reported as a
-    missing one.
-
     `text` lets a gap's question be checked too, since a model restating a
     conflict often invents a field name unrelated to the disputed one while
     quoting the options in the question itself.
     """
-    spaced = field.replace("_", " ")
-    haystack = f"{spaced} {text}".strip().lower()
+    spaced = field.replace("_", " ").lower()
 
     for candidate in candidates:
         if not candidate:
             continue
         needle = candidate.replace("_", " ").lower()
-        if fuzz.token_set_ratio(spaced, needle) >= DUPLICATE_RATIO:
-            return True
-        if _abbreviates(spaced, needle):
+        if _same_field(spaced, needle):
             return True
         # A question naming the disputed quantity is restating the conflict.
-        if text and needle in haystack:
+        if text and needle in f"{spaced} {text}".lower():
             return True
     return False
+
+
+def _same_field(left: str, right: str) -> bool:
+    """Whether two field names denote the same field.
+
+    Compares the tokens that DIFFER, not overall similarity. Overall
+    similarity is actively misleading here because field names are built by
+    composing shared words, so the shared part dominates the score while the
+    one token carrying the meaning is drowned out: "encoder layers" and
+    "decoder layers" score 86 and are opposites, and a property test generated
+    "weight learning decay" against "weight learning rate" to make the same
+    point.
+
+    Two names match when everything one has that the other lacks is an
+    abbreviation of something the other has - or when it has nothing extra at
+    all, which is the qualifier case ("tokenizer type" against "tokenizer").
+    """
+    a, b = set(left.split()), set(right.split())
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+
+    # Single-token names have no distinguishing token to protect, so a spelling
+    # difference is the only thing similarity could mean. "optimizer" against
+    # "optimiser" is one field; nothing is lost by matching it.
+    if len(a) == 1 and len(b) == 1:
+        return _prefix_match(left, right) or _spelling_variant(left, right)
+
+    return _extras_are_abbreviations(a, b) or _extras_are_abbreviations(b, a)
+
+
+def _extras_are_abbreviations(extra_side: set[str], other: set[str]) -> bool:
+    """Every token unique to one side abbreviates something on the other."""
+    extras = extra_side - other
+    if not extras:
+        return True
+    return all(
+        any(_prefix_match(token, kept) or _spelling_variant(token, kept) for kept in other)
+        for token in extras
+    )
 
 
 #: Shortest prefix accepted as an abbreviation. Below this, "num" would
@@ -292,31 +323,41 @@ _MIN_ABBREVIATION = 4
 
 
 def _abbreviates(left: str, right: str) -> bool:
-    """Whether one name is the other with words abbreviated.
-
-    Token similarity cannot see this. "weight init scheme" against "weight
-    initialization" scores 56, which is BELOW "num steps" against "num epochs"
-    at 74 - and those two are genuinely different quantities that must never
-    merge. No threshold separates them, so abbreviation needs its own rule.
-
-    Every token of the shorter name must have a partner in the longer one that
-    it shares a prefix with. Extra qualifiers on the longer name are ignored,
-    which is what lets "weight init scheme" absorb "weight initialization"
-    while "num steps" and "num epochs" stay apart on their second token.
-    """
+    """Whether one name is the other with every word abbreviated."""
     a, b = left.split(), right.split()
     if not a or not b:
         return False
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-
     return all(any(_prefix_match(token, other) for other in longer) for token in shorter)
 
 
 def _prefix_match(token: str, other: str) -> bool:
+    """Whether one token is the other truncated, e.g. init / initialization."""
     if token == other:
         return True
     short, long_ = (token, other) if len(token) <= len(other) else (other, token)
     return len(short) >= _MIN_ABBREVIATION and long_.startswith(short)
+
+
+#: Below this length a single substitution is too much of the word to be a
+#: spelling difference: "max" and "min" differ by one character and are
+#: opposites.
+_MIN_SPELLING_LENGTH = 5
+
+
+def _spelling_variant(token: str, other: str) -> bool:
+    """Whether two tokens are the same word spelled differently.
+
+    Defined as one substitution in a word of the same length, rather than as a
+    similarity threshold. The thresholds are too close together to be safe:
+    "initialisation" against "initialization" scores 93 and "encoder" against
+    "decoder" scores 86, so any constant separating them sits in a two-point
+    band and the next pair lands in it. Counting the edits instead is exact -
+    the spelling pairs differ by one character, the opposites by two.
+    """
+    if len(token) != len(other) or len(token) < _MIN_SPELLING_LENGTH:
+        return False
+    return sum(1 for x, y in zip(token, other, strict=True) if x != y) == 1
 
 
 def _criticality(value: Any) -> Criticality:

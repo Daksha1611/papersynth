@@ -57,12 +57,15 @@ class UsageSnapshot:
     def headroom(self) -> int | None:
         """Calls still usable, against the ceiling the router enforces.
 
-        Reporting against the raw limit would advertise headroom the router
-        will refuse to spend, which is exactly the kind of number that sends
-        you debugging a phantom problem.
+        Zero while the provider is blocked, whatever the counter says. A
+        rate-limited provider has no usable headroom even on its first call of
+        the day, and reporting the unspent allowance would advertise capacity
+        the router will refuse to touch.
         """
         if self.safe_limit is None:
-            return None
+            return 0 if self.exhausted else None
+        if self.exhausted:
+            return 0
         return max(0, self.safe_limit - self.requests)
 
 
@@ -104,11 +107,9 @@ class UsageTracker:
             return usage.requests >= int(limit * self.safety_margin)
 
     def headroom(self, provider_id: str) -> int | None:
-        with self._lock:
-            limit = self.limits.get(provider_id)
-            if limit is None:
-                return None
-            return max(0, int(limit * self.safety_margin) - self._today(provider_id).requests)
+        """Usable calls left, or None when the provider has no known limit."""
+        snapshot = self.snapshot([provider_id])
+        return snapshot[0].headroom if snapshot else None
 
     def snapshot(self, provider_ids: list[str] | None = None) -> list[UsageSnapshot]:
         with self._lock:
@@ -165,12 +166,15 @@ class UsageTracker:
                 entry.blocked_until = max(entry.blocked_until, time.time() + retry_after)
             else:
                 # No Retry-After header means we cannot tell a per-minute limit
-                # from a per-day one. Assume the per-day case and also push the
-                # request count to the ceiling, so headroom reporting is honest.
+                # from a per-day one, so assume the per-day case and block
+                # until the counter resets.
+                #
+                # `requests` is deliberately NOT bumped to the ceiling here.
+                # Doing that forced headroom to zero, which blocked_until
+                # already achieves, while making the count itself a fiction -
+                # gemini reported 1350 requests after roughly ten, and
+                # `papersynth cost --by-provider` published that number.
                 entry.blocked_until = max(entry.blocked_until, _seconds_until_utc_midnight())
-                limit = self.limits.get(provider_id)
-                if limit is not None:
-                    entry.requests = max(entry.requests, int(limit * self.safety_margin))
             self._save()
 
     def clear_block(self, provider_id: str) -> None:
