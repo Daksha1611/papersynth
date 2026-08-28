@@ -236,7 +236,10 @@ class Aligner:
 def _alignment_key(claim: Claim) -> str:
     """The blocking key. Exact for hyperparameters, best-effort otherwise."""
     payload = claim.payload
-    for field in ("canonical_name", "component_id", "name", "label", "metric"):
+    # sub_problem first: a method claim aligns on the question it answers, not
+    # on the approach it names, or two papers proposing rival answers would
+    # never be compared.
+    for field in ("canonical_name", "sub_problem", "component_id", "name", "label", "metric"):
         value = payload.get(field)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()

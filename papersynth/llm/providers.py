@@ -29,6 +29,7 @@ from papersynth.llm.base import (
     Completion,
     LLMProvider,
     Usage,
+    as_object_schema,
     parse_json_response,
     schema_instruction,
 )
@@ -113,8 +114,11 @@ class GeminiProvider:
         if system:
             body["systemInstruction"] = {"parts": [{"text": system}]}
         if schema is not None:
+            wire_schema = as_object_schema(schema)
             body["generationConfig"]["responseMimeType"] = "application/json"
-            body["contents"][0]["parts"][0]["text"] = f"{prompt}\n\n{schema_instruction(schema)}"
+            body["contents"][0]["parts"][0]["text"] = (
+                f"{prompt}\n\n{schema_instruction(wire_schema)}"
+            )
 
         url = f"{GEMINI_BASE_URL}/models/{self.model}:generateContent"
         started = time.perf_counter()

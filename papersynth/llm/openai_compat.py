@@ -19,8 +19,15 @@ from papersynth.core.errors import (
     ModelNotFoundError,
     ProviderError,
     RateLimitError,
+    SchemaValidationError,
 )
-from papersynth.llm.base import Completion, Usage, parse_json_response, schema_instruction
+from papersynth.llm.base import (
+    Completion,
+    Usage,
+    as_object_schema,
+    parse_json_response,
+    schema_instruction,
+)
 
 
 class OpenAICompatibleProvider:
@@ -59,8 +66,9 @@ class OpenAICompatibleProvider:
             messages.append({"role": "system", "content": system})
 
         user_content = prompt
-        if schema is not None:
-            user_content = f"{prompt}\n\n{schema_instruction(schema)}"
+        wire_schema = as_object_schema(schema) if schema is not None else None
+        if wire_schema is not None:
+            user_content = f"{prompt}\n\n{schema_instruction(wire_schema)}"
         messages.append({"role": "user", "content": user_content})
 
         body: dict[str, Any] = {
@@ -69,7 +77,7 @@ class OpenAICompatibleProvider:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        if schema is not None and self.supports_json_mode:
+        if wire_schema is not None and self.supports_json_mode:
             body["response_format"] = {"type": "json_object"}
 
         headers = {"Content-Type": "application/json", **self.extra_headers}
@@ -141,6 +149,15 @@ class OpenAICompatibleProvider:
                 f"{self.provider_id} does not serve model {self.model!r}. "
                 "Free-tier model IDs are delisted without notice - check the "
                 f"provider's current catalogue. Response: {detail}"
+            )
+
+        if response.status_code in (400, 422) and "json_validate_failed" in detail:
+            raise SchemaValidationError(
+                f"{self.provider_id} JSON mode",
+                [
+                    "the provider rejected the model's output as not a JSON object. "
+                    "Array schemas must be wrapped before sending; see as_object_schema."
+                ],
             )
 
         if response.status_code in (400, 422) and _mentions_content_policy(detail):

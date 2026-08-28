@@ -15,7 +15,8 @@
         "dataset",
         "component",
         "result",
-        "assumption"
+        "assumption",
+        "method"
       ]
     },
     "member_claims": {

@@ -5,5 +5,11 @@ from __future__ import annotations
 from papersynth.extract.extractors.algorithm import AlgorithmExtractor
 from papersynth.extract.extractors.equation import EquationExtractor
 from papersynth.extract.extractors.hyperparameter import HyperparameterExtractor
+from papersynth.extract.extractors.method import MethodExtractor
 
-__all__ = ["AlgorithmExtractor", "EquationExtractor", "HyperparameterExtractor"]
+__all__ = [
+    "AlgorithmExtractor",
+    "EquationExtractor",
+    "HyperparameterExtractor",
+    "MethodExtractor",
+]

@@ -24,6 +24,11 @@ ClaimType = Literal[
     "component",
     "result",
     "assumption",
+    #: A design decision: which approach a paper took to a sub-problem, and
+    #: whether it adopted or explicitly rejected it. Distinct from a
+    #: hyperparameter because it carries no value to compare - two papers can
+    #: disagree completely without a number between them.
+    "method",
 ]
 ClaimStatus = Literal["extracted", "verified", "rejected", "superseded"]
 CheckResult = Literal["pass", "fail", "warn", "n/a"]

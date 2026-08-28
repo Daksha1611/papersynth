@@ -119,6 +119,30 @@ def parse_json_response(text: str, *, provider_id: str) -> Any:
     )
 
 
+#: The key an array schema is wrapped under. `_as_items` in the extractor base
+#: already unwraps it, so nothing downstream needs to know this happened.
+ARRAY_ENVELOPE = "items"
+
+
+def as_object_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a top-level array schema in an object.
+
+    Providers implement JSON mode as "must emit a JSON object", so a bare array
+    is rejected server-side even when it is exactly what was asked for. Groq
+    returns json_validate_failed with failed_generation "[]" - the model was
+    right and the request was wrong. That silently cost a whole paper's method
+    extraction before it was noticed, because the rejection surfaces as a
+    provider error rather than as bad output.
+    """
+    if schema.get("type") != "array":
+        return schema
+    return {
+        "type": "object",
+        "properties": {ARRAY_ENVELOPE: schema},
+        "required": [ARRAY_ENVELOPE],
+    }
+
+
 def schema_instruction(schema: dict[str, Any]) -> str:
     """Prompt fragment pinning the output shape.
 

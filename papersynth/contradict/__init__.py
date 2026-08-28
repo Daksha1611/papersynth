@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from papersynth.contradict.detectors.method_conflict import MethodConflictDetector
 from papersynth.contradict.detectors.value_conflict import (
     ValueConflictDetector,
     attach_paper_support,
@@ -20,6 +21,7 @@ __all__ = [
     "DETECTORS",
     "ContradictionScan",
     "Detector",
+    "MethodConflictDetector",
     "ValueConflictDetector",
     "attach_paper_support",
     "detect",
@@ -50,6 +52,7 @@ def register_detector(cls: type[Detector]) -> type[Detector]:
 
 
 register_detector(ValueConflictDetector)
+register_detector(MethodConflictDetector)
 
 
 class ContradictionScan:
