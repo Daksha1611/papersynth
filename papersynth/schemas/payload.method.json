@@ -28,6 +28,11 @@
       "type": ["string", "null"],
       "description": "The reason the paper gives, if it gives one. Never inferred."
     },
+    "attribution": {
+      "type": "string",
+      "enum": ["own", "prior_work"],
+      "description": "Whether this is the paper's own decision or a description of what another paper does. A background section explaining a predecessor's design is not a decision by the paper containing it."
+    },
     "applies_to": { "type": "string" },
     "condition": { "type": ["string", "null"] },
     "stated_explicitly": { "type": "boolean" }

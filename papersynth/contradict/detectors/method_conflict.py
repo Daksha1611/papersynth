@@ -68,7 +68,11 @@ class MethodConflictDetector:
         if cluster.concept_type != "method" or not cluster.is_multi_paper:
             return []
 
-        claims = [c for c in graph.claims_in(cluster) if c.status == "verified"]
+        claims = [
+            c
+            for c in graph.claims_in(cluster)
+            if c.status == "verified" and c.payload.get("attribution", "own") == "own"
+        ]
         if len(claims) < 2:
             return []
 

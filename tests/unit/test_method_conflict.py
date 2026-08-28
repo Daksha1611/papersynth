@@ -21,13 +21,22 @@ from tests.conftest import make_doc
 POLICY = Policy.load("config/reconcile_policy.yaml")
 
 
-def method_claim(paper, sub_problem, approach, adopted=True, condition=None, rationale=None):
+def method_claim(
+    paper,
+    sub_problem,
+    approach,
+    adopted=True,
+    condition=None,
+    rationale=None,
+    attribution="own",
+):
     payload = {
         "sub_problem": sub_problem,
         "approach": approach,
         "adopted": adopted,
         "alternatives_rejected": [],
         "rationale": rationale,
+        "attribution": attribution,
         "applies_to": "global",
         "condition": condition,
         "stated_explicitly": True,
@@ -193,6 +202,123 @@ class TestDuplicateWording:
         a = method_claim("p1", "positional_encoding", "sinusoidal positional encoding")
         b = method_claim("p2", "positional_encoding", "learned positional encoding")
         assert len(scan(a, b)[0].positions) == 2
+
+
+class TestAttribution:
+    """A background section explaining a predecessor's design is not a decision
+    by the paper containing it. RoBERTa describes BERT's NSP at length before
+    removing it, and reading that as RoBERTa's own choice made RoBERTa look
+    like an NSP proponent - the opposite of its argument."""
+
+    def test_a_prior_work_description_is_not_a_position(self):
+        bert = method_claim("bert", "sentence_level_objective", "NSP")
+        roberta_background = method_claim(
+            "roberta", "sentence_level_objective", "NSP", attribution="prior_work"
+        )
+        albert = method_claim("albert", "sentence_level_objective", "SOP")
+
+        found = scan(bert, roberta_background, albert)
+
+        assert len(found) == 1
+        assert "roberta" not in {p.paper_id for p in found[0].positions}
+
+    def test_a_paper_is_not_made_to_contradict_itself_by_background(self):
+        """RoBERTa describing NSP and removing NSP is one coherent position."""
+        describes = method_claim(
+            "roberta", "sentence_level_objective", "NSP", attribution="prior_work"
+        )
+        removes = method_claim("roberta", "sentence_level_objective", "NSP", adopted=False)
+        bert = method_claim("bert", "sentence_level_objective", "NSP")
+
+        found = scan(describes, removes, bert)
+
+        assert len(found) == 1
+        roberta = [p for p in found[0].positions if p.paper_id == "roberta"]
+        assert len(roberta) == 1
+        assert roberta[0].position.startswith("removes")
+
+    def test_background_alone_yields_no_conflict(self):
+        """Two papers both describing a third paper's design do not disagree."""
+        a = method_claim("p1", "tokenizer", "WordPiece", attribution="prior_work")
+        b = method_claim("p2", "tokenizer", "SentencePiece", attribution="prior_work")
+        assert scan(a, b) == []
+
+    def test_own_is_the_default(self):
+        """A decision wrongly kept is visible and dismissable; one wrongly
+        discarded as background is simply absent."""
+        from papersynth.extract.extractors.method import MethodExtractor
+        from papersynth.llm.stub import StubProvider
+
+        result = MethodExtractor(
+            StubProvider(
+                [
+                    [
+                        {
+                            "sub_problem": "tokenizer",
+                            "approach": "wordpiece",
+                            "adopted": True,
+                            "quote": "learning rate of 0.0001",
+                        }
+                    ]
+                ]
+            )
+        ).extract(make_doc())
+
+        assert result.claims[0].payload["attribution"] == "own"
+
+
+class TestReferenceTrace:
+    """Section 10.2: a claim whose span cites another work carries that
+    reference, so a borrowed method is not credited to the citing paper."""
+
+    def test_a_cited_span_records_the_reference(self):
+        from papersynth.extract.base import reference_trace
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest("tests/fixtures/sample_paper.tex", paper_id="t.1")
+        secondary = reference_trace("following [bahdanau2014], we use attention", doc)
+
+        assert secondary is not None
+        assert secondary.cited_ref == "bahdanau2014"
+        assert secondary.resolved_paper_id == "1409.0473"
+
+    def test_an_uncited_span_records_nothing(self):
+        from papersynth.extract.base import reference_trace
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest("tests/fixtures/sample_paper.tex", paper_id="t.1")
+        assert reference_trace("we use a learning rate of 0.0001", doc) is None
+
+    def test_a_special_token_is_not_a_citation(self):
+        """BERT writes [MASK], [CLS] and [SEP] constantly, and reading those as
+        references attributed BERT's own masking decisions to a cited work."""
+        from papersynth.extract.base import reference_trace
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest("tests/fixtures/sample_paper.tex", paper_id="t.1")
+        for token in ("[MASK]", "[CLS]", "[SEP]"):
+            text = f"we replace the word with the {token} token during training"
+            assert reference_trace(text, doc) is None, token
+
+    def test_a_citation_after_a_special_token_is_still_found(self):
+        from papersynth.extract.base import reference_trace
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest("tests/fixtures/sample_paper.tex", paper_id="t.1")
+        secondary = reference_trace("the [MASK] token, following [bahdanau2014], is used here", doc)
+        assert secondary is not None
+        assert secondary.cited_ref == "bahdanau2014"
+
+    def test_an_unresolvable_key_is_still_recorded(self):
+        """The citation is evidence even when the bibliography did not parse."""
+        from papersynth.extract.base import reference_trace
+        from papersynth.ingest.latex import LatexIngestor
+
+        doc = LatexIngestor().ingest("tests/fixtures/sample_paper.tex", paper_id="t.1")
+        secondary = reference_trace("as shown in [unknownkey2020] the method works", doc)
+
+        assert secondary is not None
+        assert secondary.resolved_paper_id is None
 
 
 class TestNeverAutoResolved:

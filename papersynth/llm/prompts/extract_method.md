@@ -19,6 +19,8 @@ Return a JSON array. One object per decision:
                   removes it
 - `alternatives_rejected`  approaches the paper considered and did not take
 - `rationale`     the reason the paper gives, or null
+- `attribution`   `"own"` if THIS paper made this decision, `"prior_work"` if the
+                  paper is describing what an earlier paper does
 - `applies_to`    the component it concerns, or `"global"`
 - `condition`     the scope under which it holds, or null
 - `stated_explicitly`  false if you inferred it rather than read it
@@ -44,8 +46,17 @@ DON'T record a rationale the paper does not give. Use null.
 DON'T record hyperparameter values here. A learning rate is a number, not a
 choice between approaches.
 
-DON'T record a decision this paper merely attributes to earlier work unless
-this paper adopts it too.
+DO set `attribution: "prior_work"` when the paper is describing someone else's
+design rather than making a choice. Background and related-work sections
+routinely explain a predecessor in detail, and that explanation is not a
+decision by the paper containing it. A paper that describes an approach at
+length and then replaces it has made ONE decision - to replace it.
+
+Ask: if this paper had never been written, would this sentence still be true of
+some other paper? If yes, it is `prior_work`.
+
+DO still use `attribution: "own"` when the paper adopts something it credits to
+earlier work. "Following [12], we use Adam" is this paper's decision.
 
 DON'T invent a decision from silence. A paper not mentioning an approach has
 not rejected it.

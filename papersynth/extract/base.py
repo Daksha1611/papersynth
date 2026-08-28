@@ -15,13 +15,14 @@ ever ran.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from papersynth.core import ids
 from papersynth.core.document import Section, Span, StructuredDocument
-from papersynth.core.models import Claim, ClaimType, Provenance
+from papersynth.core.models import Claim, ClaimType, Provenance, SecondaryProvenance
 from papersynth.llm.base import LLMProvider
 from papersynth.schemas import validate
 
@@ -275,6 +276,7 @@ class LLMExtractor(ABC):
             extraction_method="llm",
             extractor_version=self.extractor_version,
             confidence=_confidence(doc),
+            secondary=reference_trace(span.text, doc),
         )
         claim = Claim.build(
             paper_id=doc.paper_id,
@@ -303,6 +305,47 @@ def _as_items(parsed: Any) -> list[Any]:
         # A single object is a single claim.
         return [parsed] if parsed else []
     return []
+
+
+#: Citations as the LaTeX ingestor renders them: \cite{key} becomes [key].
+_CITATION = re.compile(r"\[([A-Za-z][A-Za-z0-9_:.\-]{2,})\]")
+
+
+def reference_trace(span_text: str, doc: StructuredDocument) -> SecondaryProvenance | None:
+    """Record the work a claim's span cites (section 10.2).
+
+    "Following [12], we use cosine decay" credits the citing paper with a
+    method it borrowed unless the reference is carried alongside the claim.
+
+    What this establishes is narrow and worth stating: the span cites this
+    work. It does not establish that the claim was borrowed - "unlike [12], we
+    use X" cites without borrowing - so this is evidence for a reader and for
+    later stages to weigh, never a verdict on its own.
+    """
+    known = {r.key: r for r in doc.references}
+
+    for match in _CITATION.finditer(span_text):
+        key = match.group(1)
+        resolved = known.get(key)
+        if resolved is None and not _looks_like_bibkey(key):
+            continue
+        return SecondaryProvenance(
+            cited_ref=key,
+            resolved_paper_id=resolved.arxiv_id if resolved and resolved.arxiv_id else None,
+        )
+    return None
+
+
+def _looks_like_bibkey(key: str) -> bool:
+    """Whether a bracketed token is plausibly a citation key.
+
+    Needed because papers bracket things that are not citations. BERT writes
+    [MASK], [CLS] and [SEP] constantly, and reading those as references
+    attributed BERT's own masking decisions to a cited work. A bibliography key
+    almost always carries a year; a special token is short, all-caps and has no
+    digits.
+    """
+    return any(ch.isdigit() for ch in key) and not key.isupper()
 
 
 def _confidence(doc: StructuredDocument) -> float:

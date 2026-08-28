@@ -108,6 +108,12 @@ class MethodExtractor(LLMExtractor):
         payload.setdefault("alternatives_rejected", [])
         payload.setdefault("stated_explicitly", True)
 
+        # "own" is the safe default: a decision wrongly kept is visible in the
+        # conflict list and can be dismissed, while one wrongly discarded as
+        # background is simply absent and nobody knows to look for it.
+        attribution = str(payload.get("attribution", "own")).strip().lower()
+        payload["attribution"] = attribution if attribution == "prior_work" else "own"
+
         # A model that omits `adopted` is describing something the paper uses;
         # a rejection is never the silent default.
         payload["adopted"] = bool(payload.get("adopted", True))
