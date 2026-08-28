@@ -723,7 +723,10 @@ def eval_gaps(
     for note in report.notes:
         console.print(f"[dim]  {note}[/dim]")
 
-    if report.recall < 0.80:
+    # Only warn when recall was actually measured. With --fp-only there is no
+    # sweep, so recall is 0/0, and "0.00 below target" would invent a failure
+    # out of a measurement that was never taken.
+    if not fp_only and report.recall < 0.80:
         err.print(
             f"[yellow]recall {report.recall:.2f} is below the 0.80 target (section 13.1)[/yellow]"
         )
