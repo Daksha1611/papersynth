@@ -16,6 +16,7 @@ differently scoped value is not a disagreement (ER-04).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -134,7 +135,17 @@ def scripted_provider() -> StubProvider:
     """Serves extraction responses by paper, and entailment for everything else."""
 
     def respond(prompt: str):
-        if "adversarial" in prompt.lower() or "Does the passage state" in prompt:
+        if "Your job" in prompt and "SAME configurable quantity" in prompt:
+            # Split gate: these fixtures describe one shared encoder, so every
+            # aligned claim really is the same quantity.
+            return {
+                "assignments": [
+                    {"claim_id": cid, "concept": "same"}
+                    for cid in re.findall(r"claim_id: (clm_[0-9a-f]{6})", prompt)
+                ],
+                "reason": "one quantity, values genuinely disagree",
+            }
+        if "Does the passage state" in prompt:
             return ENTAILED
         for paper_id, items in EXTRACTIONS.items():
             marker = {

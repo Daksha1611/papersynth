@@ -126,6 +126,8 @@ class Pipeline:
         workspace: Workspace | None = None,
         extractors: list[str] | None = None,
         entailment: bool = True,
+        split_gate: bool = False,
+        embedding_merges: bool = False,
         ledger: Ledger | None = None,
     ) -> None:
         self.settings = settings or get_settings()
@@ -133,6 +135,19 @@ class Pipeline:
         self.workspace = workspace
         self.extractors = extractors or ["hyperparameter"]
         self.entailment = entailment
+        #: Off by default, on the measurement rather than on principle. On
+        #: BERT/RoBERTa/ALBERT the gate split batch_size into three concepts
+        #: and lost the genuine BERT-256 against RoBERTa-8000 disagreement,
+        #: which is the corpus's headline finding, while the splits it got
+        #: right (hidden_dim into three model variants) removed no false
+        #: contradiction because the condition grouping had already kept those
+        #: apart. One real finding lost, none gained.
+        #:
+        #: It remains worth enabling where its designed job actually arises:
+        #: alongside embedding merges, where it correctly rejected all five
+        #: proposals including num_steps merged with warmup_steps.
+        self.split_gate = split_gate
+        self.embedding_merges = embedding_merges
         self.ledger = ledger or Ledger()
 
     def run(
@@ -157,7 +172,11 @@ class Pipeline:
         verified_sets = self._per_paper(documents, result)
         result.claims = {c.claim_id: c for cs in verified_sets for c in cs.claims}
 
-        graph, alignment = Aligner(threshold=self.settings.align_threshold).align(verified_sets)
+        graph, alignment = Aligner(
+            threshold=self.settings.align_threshold,
+            provider=self.provider if self.split_gate else None,
+            embedding_merges=self.embedding_merges,
+        ).align(verified_sets)
         if self.workspace:
             self.workspace.write_json("03_concept_graph.json", graph.model_dump())
 

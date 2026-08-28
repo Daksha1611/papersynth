@@ -60,11 +60,32 @@ Pre-alpha, under active construction. Building the minimal viable architecture f
 - [x] CLI wiring for the full pipeline
 - [x] Gap check (`missing_but_critical`) — static checklist pass
 - [x] Remaining extractors: equation, algorithm
+- [x] SplitterAgent (opt-in; see below)
 - [x] Symbol closure check
 
 **The MVA acceptance criterion now passes.** Given three papers with one hand-planted conflicting hyperparameter, the pipeline emits a spec that (a) contains that conflict in `open_conflicts` with both positions and full provenance, and (b) contains no fabricated conflicts — the two values stated under *different* conditions are correctly left alone.
 
 See `tests/e2e/test_mva_acceptance.py`. The end-to-end run is deterministic and offline: extraction responses are scripted, so the suite costs nothing and cannot drift.
+
+## On the SplitterAgent
+
+The split gate (`--split-gate`) reviews clusters that span papers and rejects merges
+of things that are only superficially similar. It works, and it is **off by default**
+on the measurement rather than on principle.
+
+On BERT/RoBERTa/ALBERT it correctly separated `num_steps` from `warmup_steps` and
+`hidden_dim` into three model variants — but it also split `batch_size` into three
+concepts, losing the genuine BERT-256 vs RoBERTa-8000 disagreement, which is that
+corpus's headline finding. The splits it got right removed no false contradiction,
+because condition-and-unit grouping had already kept those apart. One real finding
+lost, none gained.
+
+Enable it where its designed job actually arises — alongside `--embedding-merges`,
+where it rejected all five bad merges that feature proposes:
+
+```bash
+papersynth run ... --embedding-merges   # implies --split-gate
+```
 
 ## Install
 

@@ -31,6 +31,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from papersynth.align.embed import Embedder, HashEmbedder, cosine
+from papersynth.align.splitter import SplitterAgent
 from papersynth.core import ids
 from papersynth.core.models import (
     Agreement,
@@ -39,6 +40,7 @@ from papersynth.core.models import (
     ConceptCluster,
     ConceptGraph,
 )
+from papersynth.llm.base import LLMProvider
 
 
 @dataclass
@@ -47,6 +49,8 @@ class AlignmentReport:
     multi_paper_clusters: int = 0
     merged_by_name: int = 0
     merged_by_embedding: int = 0
+    split_reviewed: int = 0
+    split_rejected: int = 0
     notes: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -83,11 +87,21 @@ class Aligner:
         *,
         embedder: Embedder | None = None,
         threshold: float = 0.82,
-        embedding_merges: bool = False,
+        embedding_merges: bool | None = None,
+        splitter: SplitterAgent | None = None,
+        provider: LLMProvider | None = None,
     ) -> None:
         self.embedder = embedder or HashEmbedder()
         self.threshold = threshold
-        self.embedding_merges = embedding_merges
+        self.splitter = splitter or (SplitterAgent(provider) if provider else None)
+        #: Off by default even with the gate present. Measured on
+        #: BERT/RoBERTa/ALBERT: embedding merges proposed five merges and the
+        #: gate rejected all five, so they contributed nothing except calls
+        #: spent undoing them. The gate earns its keep on same-name clusters
+        #: instead - hidden_dim aligning three model variants - which does not
+        #: depend on embedding merges at all. Opt in explicitly if a corpus
+        #: uses genuinely divergent naming.
+        self.embedding_merges = bool(embedding_merges)
 
     def align(self, claim_sets: list[ClaimSet]) -> tuple[ConceptGraph, AlignmentReport]:
         report = AlignmentReport()
@@ -105,6 +119,8 @@ class Aligner:
         for claim_type, group in sorted(by_type.items()):
             graph.clusters.extend(self._align_block(claim_type, group, report))
 
+        graph.clusters = self._apply_split_gate(graph, report)
+
         for cluster in graph.clusters:
             for alias in cluster.symbol_aliases:
                 graph.symbol_map[alias] = cluster.canonical_name
@@ -112,6 +128,45 @@ class Aligner:
         report.clusters = len(graph.clusters)
         report.multi_paper_clusters = sum(1 for c in graph.clusters if c.is_multi_paper)
         return graph, report
+
+    def _apply_split_gate(
+        self, graph: ConceptGraph, report: AlignmentReport
+    ) -> list[ConceptCluster]:
+        """Let the splitter reject merges the aligner proposed.
+
+        Only multi-paper clusters are reviewed: a single-paper cluster cannot
+        host a cross-paper contradiction, so splitting it changes nothing and
+        would spend a call to learn that.
+
+        A splitter failure leaves the cluster intact rather than dropping it.
+        Losing a cluster because a review call failed would silently remove a
+        real disagreement from the corpus, which is worse than leaving an
+        unreviewed merge visible in the artifact as split_check "n/a".
+        """
+        if self.splitter is None:
+            return graph.clusters
+
+        from papersynth.core.errors import PaperSynthError
+
+        out: list[ConceptCluster] = []
+        for cluster in graph.clusters:
+            if not cluster.is_multi_paper:
+                out.append(cluster)
+                continue
+
+            report.split_reviewed += 1
+            try:
+                replacements, note = self.splitter.review(cluster, graph.claims_in(cluster))
+            except PaperSynthError as exc:
+                report.notes.append(f"split gate failed on {cluster.cluster_id}: {exc}")
+                out.append(cluster)
+                continue
+
+            if len(replacements) > 1:
+                report.split_rejected += 1
+                report.notes.append(note)
+            out.extend(replacements)
+        return out
 
     def _align_block(
         self, claim_type: str, claims: list[Claim], report: AlignmentReport

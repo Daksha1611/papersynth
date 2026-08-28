@@ -136,6 +136,21 @@ def run(
         bool,
         typer.Option("--no-entailment", help="Skip the LLM entailment check. Cheaper."),
     ] = False,
+    split_gate: Annotated[
+        bool,
+        typer.Option(
+            "--split-gate",
+            help="Review multi-paper clusters with the SplitterAgent. Recommended "
+            "with --embedding-merges; on its own it can over-split.",
+        ),
+    ] = False,
+    embedding_merges: Annotated[
+        bool,
+        typer.Option(
+            "--embedding-merges",
+            help="Also align differently-named claims by similarity. Needs --split-gate.",
+        ),
+    ] = False,
     no_grobid: Annotated[bool, typer.Option("--no-grobid", help="Allow pdftotext only.")] = False,
 ) -> None:
     """Run the full pipeline over a set of papers."""
@@ -181,6 +196,8 @@ def run(
         workspace=workspace,
         extractors=[e.strip() for e in extractors.split(",") if e.strip()],
         entailment=not no_entailment,
+        split_gate=split_gate or embedding_merges,
+        embedding_merges=embedding_merges,
         ledger=ledger,
     )
 
