@@ -681,6 +681,14 @@ def eval_gaps(
     adversarial: Annotated[
         bool, typer.Option("--adversarial/--checklist-only", help="Include Pass B.")
     ] = True,
+    fp_only: Annotated[
+        bool,
+        typer.Option(
+            "--fp-only",
+            help="Skip the ablation sweep; one call, asks only whether the "
+            "reference spec has converged.",
+        ),
+    ] = False,
 ) -> None:
     """Measure gap recall by ablation, and false positives on a complete spec.
 
@@ -700,7 +708,7 @@ def eval_gaps(
         raise typer.Exit(1) from exc
 
     try:
-        report = evaluate_gaps(provider, adversarial=adversarial)
+        report = evaluate_gaps(provider, adversarial=adversarial, ablate_sweep=not fp_only)
     except AllProvidersExhausted as exc:
         # Expected on a day of heavy use, and not a failure of the harness.
         # The traceback this used to print buried that.

@@ -236,6 +236,16 @@ class GapEvalReport:
         return len(self.false_positives)
 
     @property
+    def converged(self) -> bool:
+        """Whether the reference spec is complete enough to measure against.
+
+        Until this is true, a false-positive count is not a false-positive
+        rate: the gaps being counted are real omissions in the reference, and
+        reporting them as invented would be the opposite of the truth.
+        """
+        return self.false_positive_count == 0
+
+    @property
     def false_positive_rate(self) -> float:
         """Invented gaps per ablation trial.
 
@@ -247,13 +257,22 @@ class GapEvalReport:
         return self.false_positive_count / trials if trials else 0.0
 
     def render(self) -> str:
-        lines = [
-            f"gap recall            {self.recall:.2f}  "
-            f"({len(self.detected)}/{len(self.detected) + len(self.missed)} ablated "
-            "fields recovered)",
-            f"false positives       {self.false_positive_count} on a complete spec "
-            "(correct answer is 0)",
-        ]
+        trials = len(self.detected) + len(self.missed)
+        lines = []
+        if trials:
+            lines.append(
+                f"gap recall            {self.recall:.2f}  "
+                f"({len(self.detected)}/{trials} ablated fields recovered)"
+            )
+        lines.append(f"gaps on complete spec {self.false_positive_count} (correct answer is 0)")
+        if not self.converged:
+            lines.append(
+                "  NOT CONVERGED - these are candidate false positives, not "
+                "confirmed ones. Each has to be inspected: a gap naming "
+                "something genuinely absent from the reference spec is a true "
+                "positive against an incomplete reference, and counting it as "
+                "invented would report the opposite of what happened."
+            )
         if self.missed:
             lines.append(f"  missed: {', '.join(sorted(self.missed))}")
         if self.false_positives:
@@ -320,8 +339,16 @@ def evaluate_gaps(
     fields: tuple[tuple[str, tuple[str, ...]], ...] = ABLATABLE_FIELDS,
     spec: dict[str, Any] | None = None,
     adversarial: bool = True,
+    ablate_sweep: bool = True,
 ) -> GapEvalReport:
-    """Measure gap recall by ablation and false positives on a complete spec."""
+    """Measure gap recall by ablation and false positives on a complete spec.
+
+    `ablate_sweep=False` runs only the false-positive half, which is a single
+    call rather than one per field. Useful for asking whether the reference
+    spec has converged - the question that needs re-asking each time it is
+    corrected - without spending a whole sweep on a recall number that has not
+    moved.
+    """
     spec = spec or COMPLETE_SPEC
     checklist = checklist or Checklist.load("config/implementability_checklist.yaml")
     agent = AdversarialGapAgent(provider) if adversarial else None
@@ -330,6 +357,9 @@ def evaluate_gaps(
     # False positives first, on the untouched spec, where zero is correct.
     for gap in _run_passes(spec, checklist, agent):
         report.false_positives.append(gap.field)
+
+    if not ablate_sweep:
+        return report
 
     for expected, removed in fields:
         ablated = ablate(spec, *removed)

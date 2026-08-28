@@ -232,7 +232,28 @@ class TestAblationHarness:
         """Recall alone would reward a detector that reports everything."""
         rendered = evaluate_gaps(StubProvider([]), adversarial=False).render()
         assert "recall" in rendered
-        assert "false positives" in rendered
+        assert "complete spec" in rendered
+
+    def test_fp_only_skips_the_sweep(self):
+        """One call rather than one per field, for re-asking whether the
+        reference spec has converged after correcting it."""
+        report = evaluate_gaps(StubProvider([]), adversarial=False, ablate_sweep=False)
+
+        assert report.detected == [] and report.missed == []
+        assert "recall" not in report.render()
+
+    def test_convergence_is_reported_separately_from_a_rate(self):
+        """Until the reference is complete, a count of gaps is not a rate of
+        invented ones - saying otherwise reports the opposite of the truth."""
+        from papersynth.eval import GapEvalReport
+
+        unconverged = GapEvalReport(detected=["a"], false_positives=["x"])
+        assert not unconverged.converged
+        assert "NOT CONVERGED" in unconverged.render()
+
+        converged = GapEvalReport(detected=["a"])
+        assert converged.converged
+        assert "NOT CONVERGED" not in converged.render()
 
     def test_false_positives_are_counted_per_trial(self):
         from papersynth.eval import GapEvalReport
