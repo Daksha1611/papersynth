@@ -35,6 +35,8 @@ class SpecDiff:
     conflicts_closed: list[str] = field(default_factory=list)
     gaps_opened: list[str] = field(default_factory=list)
     gaps_closed: list[str] = field(default_factory=list)
+    resolutions_added: list[dict[str, Any]] = field(default_factory=list)
+    resolutions_removed: list[str] = field(default_factory=list)
     review_from: str = ""
     review_to: str = ""
 
@@ -52,6 +54,8 @@ class SpecDiff:
                 self.conflicts_closed,
                 self.gaps_opened,
                 self.gaps_closed,
+                self.resolutions_added,
+                self.resolutions_removed,
                 self.review_from != self.review_to,
             )
         )
@@ -71,6 +75,9 @@ class SpecDiff:
         ]
         out += [f"{v['canonical_name']} was removed" for v in self.values_removed]
         out += [f"paper {p} was dropped from the corpus" for p in self.papers_removed]
+        # Undoing a decision is as consequential as making one: an implementer
+        # who built on a resolved conflict now has an open question again.
+        out += [f"resolution of {cid} was withdrawn" for cid in self.resolutions_removed]
         return out
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,6 +93,10 @@ class SpecDiff:
             },
             "conflicts": {"opened": self.conflicts_opened, "closed": self.conflicts_closed},
             "gaps": {"opened": self.gaps_opened, "closed": self.gaps_closed},
+            "resolutions": {
+                "added": self.resolutions_added,
+                "withdrawn": self.resolutions_removed,
+            },
             "review": {"from": self.review_from, "to": self.review_to},
             "breaking": self.breaking,
         }
@@ -133,6 +144,26 @@ def diff_specs(before: dict[str, Any], after: dict[str, Any]) -> SpecDiff:
     new_conflicts = {c["contradiction_id"] for c in after.get("open_conflicts") or []}
     result.conflicts_opened = sorted(new_conflicts - old_conflicts)
     result.conflicts_closed = sorted(old_conflicts - new_conflicts)
+
+    # BLOCKING conflicts never appear in open_conflicts - the schema forbids
+    # that severity there - so resolved_conflicts is their only trace in a
+    # spec. Without diffing it, resolving a blocking conflict, which is the
+    # single most consequential thing a reviewer does, showed as "no change".
+    old_resolved = {r["contradiction_id"]: r for r in before.get("resolved_conflicts") or []}
+    new_resolved = {r["contradiction_id"]: r for r in after.get("resolved_conflicts") or []}
+
+    for contradiction_id in sorted(new_resolved.keys() - old_resolved.keys()):
+        entry = new_resolved[contradiction_id]
+        result.resolutions_added.append(
+            {
+                "contradiction_id": contradiction_id,
+                "outcome": entry.get("outcome"),
+                "selected_claim_id": entry.get("selected_claim_id"),
+                "rule_fired": entry.get("rule_fired"),
+                "resolved_by": entry.get("resolved_by"),
+            }
+        )
+    result.resolutions_removed = sorted(old_resolved.keys() - new_resolved.keys())
 
     old_gaps = {g["field"] for g in before.get("missing_but_critical") or []}
     new_gaps = {g["field"] for g in after.get("missing_but_critical") or []}

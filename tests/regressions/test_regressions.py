@@ -742,3 +742,77 @@ class TestR012ArxivRateLimitCostsPapers:
 
         assert response.status_code == 200
         assert calls["n"] == 2, "the 429 must be retried, not surfaced"
+
+
+class TestR013BlockingResolutionInvisibleToDiff:
+    """Resolving a BLOCKING conflict showed as "No change to anything an
+    implementer depends on".
+
+    BLOCKING conflicts never appear in open_conflicts - the schema forbids
+    that severity there - so resolved_conflicts is their only trace in a spec.
+    diff compared open_conflicts and not resolved_conflicts, so the single
+    most consequential thing a reviewer does was invisible to the command that
+    exists to show what changed."""
+
+    BEFORE = {
+        "run_id": "before",
+        "generated_at": "2026-08-01T00:00:00Z",
+        "source_papers": [{"paper_id": "p1"}],
+        "components": [],
+        "open_conflicts": [],
+        "resolved_conflicts": [],
+        "missing_but_critical": [],
+        "review": {"status": "draft"},
+    }
+
+    def after(self, **overrides):
+        import copy
+
+        spec = copy.deepcopy(self.BEFORE)
+        spec["run_id"] = "after"
+        spec["resolved_conflicts"] = [
+            {
+                "contradiction_id": "ctr_0001",
+                "outcome": "SELECTED",
+                "selected_claim_id": "clm_aaaaaa",
+                "rule_fired": None,
+                "resolved_by": "human",
+            }
+        ]
+        spec.update(overrides)
+        return spec
+
+    def test_a_human_resolution_is_reported(self):
+        from papersynth.synth import diff_specs
+
+        result = diff_specs(self.BEFORE, self.after())
+
+        assert not result.identical, "resolving a blocking conflict is a change"
+        assert [r["contradiction_id"] for r in result.resolutions_added] == ["ctr_0001"]
+
+    def test_the_resolution_records_who_decided(self):
+        """A policy decision and a human decision want different scrutiny."""
+        from papersynth.synth import diff_specs
+
+        entry = diff_specs(self.BEFORE, self.after()).resolutions_added[0]
+        assert entry["resolved_by"] == "human"
+        assert entry["selected_claim_id"] == "clm_aaaaaa"
+
+    def test_a_withdrawn_resolution_is_breaking(self):
+        """An implementer who built on a resolved conflict has an open
+        question again."""
+        from papersynth.synth import diff_specs
+
+        result = diff_specs(self.after(), self.BEFORE)
+
+        assert result.resolutions_removed == ["ctr_0001"]
+        assert any("withdrawn" in line for line in result.breaking)
+
+    def test_it_survives_serialization(self):
+        import json
+
+        from papersynth.synth import diff_specs
+
+        payload = diff_specs(self.BEFORE, self.after()).to_dict()
+        json.dumps(payload)
+        assert payload["resolutions"]["added"][0]["contradiction_id"] == "ctr_0001"

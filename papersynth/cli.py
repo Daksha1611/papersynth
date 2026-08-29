@@ -725,6 +725,21 @@ def diff(
             )
         console.print(table)
 
+    if result.resolutions_added:
+        table = Table(title="Conflicts resolved")
+        table.add_column("contradiction", style="cyan")
+        table.add_column("outcome")
+        table.add_column("selected")
+        table.add_column("by")
+        for entry in result.resolutions_added:
+            table.add_row(
+                entry["contradiction_id"],
+                str(entry.get("outcome")),
+                str(entry.get("selected_claim_id") or "-"),
+                str(entry.get("resolved_by")),
+            )
+        console.print(table)
+
     for label, items, style in (
         ("values added", [v["canonical_name"] for v in result.values_added], "green"),
         ("values removed", [v["canonical_name"] for v in result.values_removed], "red"),
@@ -734,6 +749,7 @@ def diff(
         ("gaps closed", result.gaps_closed, "green"),
         ("papers added", result.papers_added, "green"),
         ("papers removed", result.papers_removed, "red"),
+        ("resolutions withdrawn", result.resolutions_removed, "red"),
     ):
         if items:
             console.print(f"[{style}]{label}:[/{style}] {', '.join(items)}")

@@ -119,10 +119,20 @@ ruff check . && ruff format --check .
 mypy papersynth
 ```
 
-### The review flow
+### Usage
+
+Check the setup before spending anything — every one of these has failed at
+least once in development, each time surfacing later as a confusing error
+somewhere else:
 
 ```bash
-papersynth run --papers a.tex,b.tex,c.tex --objective "..." --out runs/demo
+papersynth doctor
+```
+
+Then the review flow:
+
+```bash
+papersynth run --papers 1810.04805,1907.11692 --objective "..." --out runs/demo
 papersynth conflicts runs/demo --status open      # exits 2 while any remain
 papersynth resolve   runs/demo ctr_ce42684b --select clm_11f315 --note "why"
 papersynth gaps      runs/demo
@@ -131,7 +141,32 @@ papersynth approve   runs/demo --reviewer you
 ```
 
 `resolve` re-emits the spec from stage artifacts without re-extracting anything, so a
-human decision costs no model calls.
+human decision costs no model calls. `--resume` reuses papers already extracted, for
+picking a run back up after free-tier quotas reset.
+
+Exit codes are part of the contract, so scripts can branch on them: `2` means a human
+has to decide something, `3` from `diff` means a value moved that someone may already
+have built against.
+
+```bash
+papersynth diff runs/demo runs/demo_v2 --format json
+papersynth models --provider groq     # free lineups rotate; check before blaming a run
+papersynth cost  runs/demo --by-provider
+```
+
+`scripts/run.sh` wraps the whole sequence; `scripts/run_llm.sh` does the same against a
+local Ollama or vLLM endpoint, which has no quota and no per-minute ceiling.
+
+### Docker
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm papersynth doctor
+docker compose -f docker/docker-compose.yml run --rm papersynth \
+  run --papers 1810.04805 --objective "..." --out runs/demo
+```
+
+Brings up GROBID alongside, so the PDF path works without installing Java or poppler
+on the host.
 
 Tests never hit a live model. LLM interactions are recorded as cassettes and replayed, so CI is deterministic and free. A nightly job re-records against the real model and diffs the resulting specs — a diff signals prompt or model drift.
 
