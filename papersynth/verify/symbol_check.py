@@ -38,7 +38,8 @@ def symbol_check(claim: Claim) -> CheckOutcome:
     ratio = len(undefined) / len(symbols)
     listed = ", ".join(undefined[:6])
 
-    if ratio >= CORRUPTION_RATIO or claim.payload.get("source_fidelity") == "ocr_recovered":
+    degraded = claim.payload.get("source_fidelity") in ("ocr_recovered", "text_layer_suspect")
+    if ratio >= CORRUPTION_RATIO or degraded:
         return CheckOutcome(
             "fail",
             f"{len(undefined)} of {len(symbols)} symbols are undefined ({listed}); "

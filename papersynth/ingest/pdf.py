@@ -31,6 +31,7 @@ from papersynth.core.document import (
 )
 from papersynth.core.errors import IngestError
 from papersynth.ingest.base import DocumentBuilder
+from papersynth.ingest.math_layer import MathRecoverer, review
 
 TEI_NS = {"tei": "http://www.tei-c.org/ns/1.0"}
 
@@ -65,7 +66,7 @@ class GrobidIngestor:
         sha = ids.file_sha256(str(path))
         pid = paper_id or f"sha256:{sha[:16]}"
         tei = self._call_grobid(path)
-        return parse_tei(tei, paper_id=pid, sha256=sha)
+        return parse_tei(tei, paper_id=pid, sha256=sha, pdf_path=str(path))
 
     def _call_grobid(self, path: Path) -> str:
         url = f"{self.settings.grobid_url}/api/processFulltextDocument"
@@ -138,6 +139,9 @@ class PdftotextIngestor:
             "ingested without GROBID: no section structure, degraded math fidelity. "
             "Equation-derived claims from this document should not be trusted."
         )
+        # No <formula> tagging exists on this path, so any math present is
+        # inline in prose and unverifiable. Saying so is the point of R-09.
+        builder.math_fidelity = "text_layer_suspect"
 
         section_index = builder.add_section("Body")
         for page_number, page in enumerate(result.stdout.split("\f"), start=1):
@@ -150,7 +154,14 @@ class PdftotextIngestor:
         return doc
 
 
-def parse_tei(tei_xml: str, *, paper_id: str, sha256: str) -> StructuredDocument:
+def parse_tei(
+    tei_xml: str,
+    *,
+    paper_id: str,
+    sha256: str,
+    pdf_path: str | None = None,
+    recoverer: MathRecoverer | None = None,
+) -> StructuredDocument:
     """Parse GROBID TEI into a StructuredDocument."""
     try:
         root = ET.fromstring(tei_xml)
@@ -221,6 +232,17 @@ def parse_tei(tei_xml: str, *, paper_id: str, sha256: str) -> StructuredDocument
         )
 
     doc = builder.build()
+
+    # The R-01 mitigation. Every text-layer equation is checked for damage, and
+    # anything unreliable is re-recognized where a backend exists or flagged
+    # where one does not. Running after build() means it sees the equations
+    # with their final section indices.
+    reviewed, math_warnings = review(doc.equations, recoverer=recoverer, pdf_path=pdf_path)
+    doc.equations = reviewed
+    doc.warnings.extend(math_warnings)
+    degraded = {e.source_fidelity for e in reviewed} & {"ocr_recovered", "text_layer_suspect"}
+    if degraded:
+        doc.math_fidelity = sorted(degraded)[0]
     if not doc.sections:
         raise IngestError(f"GROBID produced no body text for {paper_id}")
     return doc

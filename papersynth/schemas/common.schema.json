@@ -33,7 +33,8 @@
     },
     "source_fidelity": {
       "type": "string",
-      "enum": ["latex_native", "text_layer", "ocr_recovered"]
+      "enum": ["latex_native", "text_layer", "text_layer_suspect", "ocr_recovered"],
+      "description": "How the math was obtained. text_layer_suspect means the text layer was detected as damaged and could not be re-recognized - distinct from ocr_recovered, where OCR ran, because the two need different follow-up."
     },
     "check_result": {
       "type": "string",

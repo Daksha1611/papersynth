@@ -354,9 +354,14 @@ def _confidence(doc: StructuredDocument) -> float:
     An OCR-recovered document earns less trust before any check runs, because
     garbled math and lost decimal points originate there (R-01).
     """
-    return {"latex_native": 0.95, "text_layer": 0.85, "ocr_recovered": 0.6}.get(
-        doc.math_fidelity, 0.8
-    )
+    return {
+        "latex_native": 0.95,
+        "text_layer": 0.85,
+        # Detected as damaged, whether or not OCR managed to recover it. Both
+        # mean the characters may not be what the author wrote.
+        "text_layer_suspect": 0.6,
+        "ocr_recovered": 0.6,
+    }.get(doc.math_fidelity, 0.8)
 
 
 def render_sections(doc: StructuredDocument, sections: list[Section]) -> str:

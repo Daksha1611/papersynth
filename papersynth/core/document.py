@@ -15,7 +15,10 @@ from pydantic import BaseModel, Field, model_validator
 from papersynth.core import ids
 
 IngestMethod = Literal["latex", "pdf", "pdf_no_grobid", "prepared_json"]
-SourceFidelity = Literal["latex_native", "text_layer", "ocr_recovered"]
+#: How an equation's LaTeX was obtained. text_layer_suspect is text the math
+#: layer flagged as damaged and could not recover; it earns the same confidence
+#: penalty as ocr_recovered but records honestly that no OCR ran.
+SourceFidelity = Literal["latex_native", "text_layer", "text_layer_suspect", "ocr_recovered"]
 
 
 class Span(BaseModel):

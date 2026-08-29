@@ -209,3 +209,78 @@ class TestCache:
         router.complete("identical", schema=SCHEMA, template_id="t@1")
 
         assert usage.headroom("groq") == before
+
+
+class TestThreeLegChain:
+    """Section 6.4.2's full chain. Two legs were exercised in production; the
+    third had never run, so its behaviour was an assumption. Exhaustion is
+    faked here rather than burning real quota to reach it."""
+
+    def chain(self):
+        return [
+            StubProvider(provider_id="groq", error=RateLimitError("groq", retry_after=None)),
+            StubProvider(provider_id="gemini", error=RateLimitError("gemini", retry_after=None)),
+            StubProvider([{"value": 3}], provider_id="openrouter"),
+        ]
+
+    def test_the_third_leg_serves_when_the_first_two_are_rate_limited(self):
+        result = make_router(self.chain()).complete("extract", schema=SCHEMA)
+
+        assert result.provider_id == "openrouter"
+        assert result.parsed == {"value": 3}
+
+    def test_the_chain_is_tried_in_configured_order(self):
+        chain = self.chain()
+        make_router(chain).complete("extract", schema=SCHEMA)
+
+        assert chain[0].call_count == 1, "groq tried first"
+        assert chain[1].call_count == 1, "gemini tried second"
+        assert chain[2].call_count == 1, "openrouter served"
+
+    def test_the_third_leg_is_attributed_to_the_first_failure(self):
+        """Which provider a call fell through FROM is what makes a ledger
+        readable when three legs are involved."""
+        ledger = Ledger()
+        make_router(self.chain(), ledger=ledger).complete("extract", schema=SCHEMA)
+
+        served = [e for e in ledger.entries if not e.error][-1]
+        assert served.provider_id == "openrouter"
+        assert served.fallback_from == "groq"
+
+    def test_every_leg_appears_in_the_ledger(self):
+        ledger = Ledger()
+        make_router(self.chain(), ledger=ledger).complete("extract", schema=SCHEMA)
+
+        assert {e.provider_id for e in ledger.entries} == {"groq", "gemini", "openrouter"}
+
+    def test_all_three_exhausted_pauses_rather_than_crashing(self):
+        chain = [
+            StubProvider(provider_id=p, error=RateLimitError(p, retry_after=None))
+            for p in ("groq", "gemini", "openrouter")
+        ]
+        with pytest.raises(AllProvidersExhausted) as exc:
+            make_router(chain).complete("extract", schema=SCHEMA)
+
+        assert "--resume" in str(exc.value)
+
+    def test_a_proactively_exhausted_third_leg_is_skipped_not_called(self):
+        usage = UsageTracker(limits={"openrouter": 50}, safety_margin=0.9, persist=False)
+        for _ in range(45):
+            usage.record("openrouter", Usage(1, 1))
+
+        chain = self.chain()
+        with pytest.raises(AllProvidersExhausted):
+            make_router(chain, usage=usage).complete("extract", schema=SCHEMA)
+
+        assert chain[2].call_count == 0, "a known-tapped leg must not be called"
+
+    def test_a_terminal_error_on_the_first_leg_never_reaches_the_third(self):
+        """Section 6.4.3: a schema bug hidden behind a third provider
+        coincidentally succeeding would never be found."""
+        chain = self.chain()
+        chain[0] = StubProvider(provider_id="groq", error=SchemaValidationError("groq", ["bad"]))
+
+        with pytest.raises(SchemaValidationError):
+            make_router(chain).complete("extract", schema=SCHEMA)
+
+        assert chain[1].call_count == 0 and chain[2].call_count == 0

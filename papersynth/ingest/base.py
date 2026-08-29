@@ -97,10 +97,10 @@ class DocumentBuilder:
 
     def add_equation(self, equation: RawEquation) -> None:
         self._equations.append(equation)
-        # An OCR-recovered equation degrades the whole document's math fidelity;
+        # Either damaged value degrades the whole document's math fidelity;
         # downstream confidence penalties key off this.
-        if equation.source_fidelity == "ocr_recovered":
-            self.math_fidelity = "ocr_recovered"
+        if equation.source_fidelity in ("ocr_recovered", "text_layer_suspect"):
+            self.math_fidelity = equation.source_fidelity
 
     def add_algorithm(self, algorithm: RawAlgorithm) -> None:
         self._algorithms.append(algorithm)

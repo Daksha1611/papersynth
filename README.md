@@ -135,6 +135,14 @@ human decision costs no model calls.
 
 Tests never hit a live model. LLM interactions are recorded as cassettes and replayed, so CI is deterministic and free. A nightly job re-records against the real model and diffs the resulting specs — a diff signals prompt or model drift.
 
+## Design amendments
+
+[`docs/design-amendments.md`](docs/design-amendments.md) records where the
+implementation diverges from the v0.1 design, and why. Each entry is a
+correction forced by something a run actually did — including one case where a
+measurement in the design turns out not to be possible, and the design's claim
+was removed rather than the number faked.
+
 ## Schemas
 
 `papersynth/schemas/*.json` are the public contract, versioned semantically and readable without touching Python. `spec.schema.json` in particular is treated as this system's API: downstream agents pin against it, so it is additive-only within a minor version.
