@@ -617,3 +617,128 @@ class TestR010GapNameMerging:
 
         assert _matches_any("weight_init", ["weight_initialization"])
         assert _matches_any("weight_initialization", ["weight_init"])
+
+
+class TestR011FailedIngestHiddenFromAccounting:
+    """A run asked for three papers, fetched one, emitted a spec, and reported
+    "1/1 papers contributing" with no partial warning. papers_ingested counted
+    what arrived rather than what was asked for, so a spec built from a third
+    of the requested corpus looked complete.
+
+    This is the same failure already fixed for extraction, unfixed for
+    ingestion - and worse at the CLI, which is the surface a user without
+    Python sees."""
+
+    @pytest.fixture
+    def one_of_three(self, tmp_path):
+        import sys
+        from pathlib import Path as _Path
+
+        sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+        from e2e.test_mva_acceptance import EXTRACTIONS
+
+        from papersynth.core.run import Pipeline, Workspace
+        from papersynth.ingest.latex import LatexIngestor
+        from papersynth.llm.stub import StubProvider
+
+        fixtures = _Path(__file__).resolve().parent.parent / "fixtures" / "three_paper"
+        # Only one document reached the pipeline; the caller asked for three.
+        docs = [LatexIngestor().ingest(str(fixtures / "paper_a.tex"), paper_id="paper_a")]
+
+        def respond(prompt: str):
+            return EXTRACTIONS["paper_a"] if "batch size of 128" in prompt else []
+
+        return Pipeline(
+            StubProvider(respond),
+            workspace=Workspace(tmp_path, "partial"),
+            extractors=["hyperparameter"],
+            entailment=False,
+        ).run(docs, objective="Test.", run_id="partial", papers_requested=3)
+
+    def test_the_spec_records_what_was_asked_for(self, one_of_three):
+        summary = one_of_three.spec["verification_summary"]
+        assert summary["papers_requested"] == 3
+        assert summary["papers_ingested"] == 1
+
+    def test_the_review_document_leads_with_the_shortfall(self, one_of_three, tmp_path):
+        from papersynth.synth import render_review
+
+        review = render_review(
+            one_of_three.spec, contradictions=[], reconciliation=None, gaps=[], blocking=[]
+        )
+        assert "Partial corpus" in review
+        assert "1 of 3" in review
+
+    def test_a_complete_run_raises_no_shortfall(self):
+        """The warning must not fire on a healthy run, or it becomes noise."""
+        from papersynth.synth import render_review
+
+        spec = {
+            "run_id": "r",
+            "generated_at": "2026-08-29T00:00:00Z",
+            "objective": "o",
+            "source_papers": [{"paper_id": "p1"}],
+            "verification_summary": {
+                "papers_requested": 1,
+                "papers_ingested": 1,
+                "papers_contributing": 1,
+                "claims_total": 1,
+                "verified": 1,
+                "rejected": 0,
+                "rejection_reasons": {},
+                "provenance_completeness": 1.0,
+            },
+            "open_conflicts": [],
+            "missing_but_critical": [],
+            "resolved_conflicts": [],
+            "assumptions": [],
+            "components": [],
+            "review": {"status": "draft"},
+        }
+        review = render_review(spec, contradictions=[], reconciliation=None, gaps=[], blocking=[])
+        assert "Partial corpus" not in review
+
+
+class TestR012ArxivRateLimitCostsPapers:
+    """arXiv returned 429 and two of three papers were silently dropped from
+    the run. Their API asks for roughly three seconds between calls, and
+    nothing enforced that - so a corpus shrank because of request pacing
+    rather than anything about the papers."""
+
+    def test_requests_are_spaced_out(self):
+        import time
+
+        from papersynth.ingest import arxiv
+
+        arxiv._last_request_at = 0.0
+        start = time.monotonic()
+        arxiv._polite_wait()
+        arxiv._polite_wait()
+        elapsed = time.monotonic() - start
+
+        assert elapsed >= arxiv._MIN_INTERVAL_S * 0.9, "a second call must wait"
+
+    def test_a_429_is_retried_rather_than_dropped(self, monkeypatch):
+        """Giving up costs the whole paper; waiting costs seconds."""
+        import httpx
+
+        from papersynth.ingest import arxiv
+
+        calls = {"n": 0}
+
+        def fake_get(url, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    429, headers={"retry-after": "0"}, request=httpx.Request("GET", url)
+                )
+            return httpx.Response(200, text="ok", request=httpx.Request("GET", url))
+
+        monkeypatch.setattr(arxiv.httpx, "get", fake_get)
+        monkeypatch.setattr(arxiv, "_MIN_INTERVAL_S", 0.0)
+        arxiv._last_request_at = 0.0
+
+        response = arxiv._get("https://example.invalid")
+
+        assert response.status_code == 200
+        assert calls["n"] == 2, "the 429 must be retried, not surfaced"

@@ -31,14 +31,15 @@ def render(
 
     summary_counts = spec.get("verification_summary", {})
     ingested = summary_counts.get("papers_ingested", len(spec["source_papers"]))
-    contributing = summary_counts.get("papers_contributing", ingested)
-    if contributing < ingested:
+    requested = summary_counts.get("papers_requested", ingested)
+    contributing = summary_counts.get("papers_contributing", requested)
+    if contributing < requested:
         silent = [p["paper_id"] for p in spec["source_papers"] if not p.get("claims_contributed")]
         lines += [
             "## Partial corpus - read this first",
             "",
-            f"Only {contributing} of {ingested} papers contributed anything to this spec.",
-            f"Nothing was extracted from: {', '.join(silent)}.",
+            f"Only {contributing} of {requested} papers contributed anything to this spec.",
+            f"Nothing was extracted from: {', '.join(silent) or '(papers that failed to load)'}.",
             "",
             "Cross-paper reconciliation is the point of this tool, and it cannot",
             "have happened for papers that produced no claims. Any absence of",

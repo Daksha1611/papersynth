@@ -262,6 +262,11 @@
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
         "provenance_completeness": { "$ref": "common.schema.json#/$defs/confidence" },
+        "papers_requested": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Papers the user asked for. Above papers_ingested, some could not be fetched or parsed and the spec does not reflect them."
+        },
         "papers_ingested": { "type": "integer", "minimum": 0 },
         "papers_contributing": {
           "type": "integer",

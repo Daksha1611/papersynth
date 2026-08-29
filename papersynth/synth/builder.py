@@ -41,11 +41,16 @@ class SpecBuilder:
         objective: str,
         documents: list[StructuredDocument],
         claims: dict[str, Claim],
+        papers_requested: int | None = None,
     ) -> None:
         self.run_id = run_id
         self.objective = objective
         self.documents = documents
         self.claims = claims
+        #: What the user asked for, which is not what arrived when a paper
+        #: fails to fetch. Counting only what arrived made a run built from one
+        #: of three papers report "1/1" and look complete.
+        self.papers_requested = papers_requested or len(documents)
 
     def build_draft(self, **kwargs: Any) -> dict[str, Any]:
         """Assemble a spec for auditing, without emission gates.
@@ -383,6 +388,7 @@ class SpecBuilder:
             # Filled in by the validator, which is the component that can
             # actually measure closure across the assembled spec.
             "provenance_completeness": 1.0,
+            "papers_requested": self.papers_requested,
             "papers_ingested": len(self.documents),
             "papers_contributing": sum(
                 1 for d in self.documents if self._contribution(d.paper_id) > 0

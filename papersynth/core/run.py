@@ -68,6 +68,9 @@ class RunResult:
     blocking: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     provenance_completeness: float = 1.0
+    #: Papers the caller asked for, which exceeds len(documents) when one
+    #: could not be fetched or parsed.
+    papers_requested: int = 0
 
     @property
     def open_conflicts(self) -> list[dict[str, Any]]:
@@ -171,9 +174,11 @@ class Pipeline:
         objective: str,
         run_id: str | None = None,
         reviewer: str | None = None,
+        papers_requested: int | None = None,
     ) -> RunResult:
         run_id = run_id or self.workspace.run_id if self.workspace else "run_local"
         result = RunResult(run_id=run_id, documents=list(documents))
+        result.papers_requested = papers_requested or len(documents)
 
         if self.workspace:
             self.workspace.ensure()
@@ -345,6 +350,7 @@ class Pipeline:
             objective=objective,
             documents=result.documents,
             claims=result.claims,
+            papers_requested=result.papers_requested,
         )
 
         def assemble() -> dict[str, Any]:

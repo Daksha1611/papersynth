@@ -9,6 +9,8 @@ fallback rather than an error.
 from __future__ import annotations
 
 import re
+import threading
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,57 @@ _MODERN = re.compile(r"(?P<id>\d{4}\.\d{4,5})(?:v(?P<version>\d+))?")
 _LEGACY = re.compile(r"(?P<id>[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v(?P<version>\d+))?")
 
 _USER_AGENT = "papersynth/0.1 (https://github.com/Daksha1611/papersynth)"
+
+#: arXiv asks for roughly three seconds between API calls. Ignoring that earns
+#: a 429, and a 429 during ingestion silently costs a whole paper - the run
+#: continues with fewer sources than were asked for, which is a far worse
+#: outcome than waiting.
+_MIN_INTERVAL_S = 3.0
+
+#: Attempts before giving up on a paper. arXiv's throttling clears quickly, so
+#: a short wait usually recovers what would otherwise be a missing source.
+_MAX_ATTEMPTS = 3
+
+_last_request_at = 0.0
+_throttle = threading.Lock()
+
+
+def _polite_wait() -> None:
+    """Space requests out, however many callers there are."""
+    global _last_request_at
+    with _throttle:
+        elapsed = time.monotonic() - _last_request_at
+        if elapsed < _MIN_INTERVAL_S:
+            time.sleep(_MIN_INTERVAL_S - elapsed)
+        _last_request_at = time.monotonic()
+
+
+def _get(url: str, **kwargs: object) -> httpx.Response:
+    """GET with arXiv's rate limit respected and short throttles waited out."""
+    last: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        _polite_wait()
+        try:
+            response = httpx.get(url, **kwargs)  # type: ignore[arg-type]
+        except httpx.HTTPError as exc:
+            last = exc
+            if attempt == _MAX_ATTEMPTS - 1:
+                raise
+            time.sleep(_MIN_INTERVAL_S * (attempt + 2))
+            continue
+
+        if response.status_code == 429 and attempt < _MAX_ATTEMPTS - 1:
+            retry_after = response.headers.get("retry-after")
+            try:
+                wait = float(retry_after) if retry_after else _MIN_INTERVAL_S * (attempt + 2)
+            except ValueError:
+                wait = _MIN_INTERVAL_S * (attempt + 2)
+            time.sleep(min(wait, 30.0))
+            continue
+
+        return response
+
+    raise last if last else httpx.HTTPError("arXiv request failed")
 
 
 @dataclass(frozen=True)
@@ -69,10 +122,10 @@ class ArxivFetcher:
 
     def fetch_metadata(self, arxiv_id: str) -> ArxivMetadata:
         try:
-            response = httpx.get(
+            response = _get(
                 self.settings.arxiv_api_url,
                 params={"id_list": arxiv_id, "max_results": 1},
-                timeout=30.0,
+                timeout=60.0,
                 headers={"User-Agent": _USER_AGENT},
                 follow_redirects=True,
             )
@@ -106,8 +159,8 @@ class ArxivFetcher:
 
         url = f"https://arxiv.org/e-print/{arxiv_id}"
         try:
-            response = httpx.get(
-                url, timeout=120.0, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
+            response = _get(
+                url, timeout=180.0, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
             )
         except httpx.HTTPError:
             return None
@@ -129,8 +182,8 @@ class ArxivFetcher:
 
         url = f"https://arxiv.org/pdf/{arxiv_id}"
         try:
-            response = httpx.get(
-                url, timeout=120.0, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
+            response = _get(
+                url, timeout=180.0, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:

@@ -9,6 +9,7 @@ conflicts remain so a pipeline can stop before emitting.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Annotated, Any, cast, get_args
@@ -219,7 +220,9 @@ def run(
     )
 
     try:
-        result = pipeline.run(documents, objective=objective, run_id=out.name)
+        result = pipeline.run(
+            documents, objective=objective, run_id=out.name, papers_requested=len(refs)
+        )
     except PaperSynthError as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -261,13 +264,13 @@ def _print_run_summary(result: Any, root: Path) -> None:
         console.print(f"[yellow]warning:[/yellow] {warning}")
 
     summary = (result.spec or {}).get("verification_summary", {})
-    ingested = summary.get("papers_ingested", 0)
+    requested = summary.get("papers_requested", 0) or summary.get("papers_ingested", 0)
     contributing = summary.get("papers_contributing", 0)
-    if ingested and contributing < ingested:
+    if requested and contributing < requested:
         # "0 contradictions" reads as "the papers agree" when it can equally
         # mean "only one paper was read". The distinction has to be loud.
         console.print(
-            f"\n[bold yellow]PARTIAL[/bold yellow] - only {contributing} of {ingested} "
+            f"\n[bold yellow]PARTIAL[/bold yellow] - only {contributing} of {requested} "
             "papers contributed claims. Cross-paper reconciliation did not happen "
             "for the rest, so the conflict count above is not a finding about the "
             "corpus you asked for."
@@ -674,6 +677,197 @@ def models(
             f"[yellow]The configured model {configured!r} is not in this list. "
             "A run would fail with model-not-found.[/yellow]"
         )
+
+
+@app.command()
+def diff(
+    before: Annotated[Path, typer.Argument(help="The earlier run directory.")],
+    after: Annotated[Path, typer.Argument(help="The later run directory.")],
+    fmt: Annotated[str, typer.Option("--format", help="table | json")] = "table",
+) -> None:
+    """Show what changed between two emitted specs (FR-17).
+
+    Exits 3 when a value an implementer may already have built against moved,
+    so a pipeline can gate on it. A changed number is the dangerous case: code
+    written against the old value still compiles against the new one.
+    """
+    from papersynth.synth import diff_specs
+
+    first, second = _load(before), _load(after)
+    if first.spec is None or second.spec is None:
+        err.print("[red]Both runs must have an emitted spec to diff.[/red]")
+        raise typer.Exit(1)
+
+    result = diff_specs(first.spec, second.spec)
+
+    if fmt == "json":
+        console.print_json(json.dumps(result.to_dict(), default=str))
+        raise typer.Exit(3 if result.breaking else 0)
+
+    if result.identical:
+        console.print("[green]No change to anything an implementer depends on.[/green]")
+        raise typer.Exit(0)
+
+    if result.values_changed:
+        table = Table(title="Values changed")
+        table.add_column("parameter", style="cyan")
+        table.add_column("condition")
+        table.add_column("from")
+        table.add_column("to")
+        table.add_column("resolved by")
+        for entry in result.values_changed:
+            table.add_row(
+                entry["canonical_name"],
+                entry["condition"] or "-",
+                repr(entry["from"]),
+                repr(entry["to"]),
+                entry.get("resolved_from") or "-",
+            )
+        console.print(table)
+
+    for label, items, style in (
+        ("values added", [v["canonical_name"] for v in result.values_added], "green"),
+        ("values removed", [v["canonical_name"] for v in result.values_removed], "red"),
+        ("conflicts opened", result.conflicts_opened, "yellow"),
+        ("conflicts closed", result.conflicts_closed, "green"),
+        ("gaps opened", result.gaps_opened, "yellow"),
+        ("gaps closed", result.gaps_closed, "green"),
+        ("papers added", result.papers_added, "green"),
+        ("papers removed", result.papers_removed, "red"),
+    ):
+        if items:
+            console.print(f"[{style}]{label}:[/{style}] {', '.join(items)}")
+
+    if result.review_from != result.review_to:
+        console.print(f"review: {result.review_from or '-'} -> {result.review_to or '-'}")
+
+    if result.breaking:
+        console.print(
+            "\n[bold red]Breaking for anyone who built against the earlier spec:[/bold red]"
+        )
+        for line in result.breaking:
+            console.print(f"  {line}")
+        raise typer.Exit(3)
+
+
+@app.command()
+def doctor() -> None:
+    """Check that everything a run needs is actually present.
+
+    The runbook opens with a list of things to verify by hand - GROBID
+    reachable, a key set, the configured model still served. Every one of them
+    has failed at least once during development, and each failed in a way that
+    surfaced much later as a confusing error somewhere else. This asks all of
+    them at once, before a run spends anything.
+    """
+    settings = get_settings()
+    table = Table(title="Preflight")
+    table.add_column("check", style="cyan")
+    table.add_column("result")
+    table.add_column("detail", overflow="fold")
+
+    problems = 0
+
+    def row(name: str, ok: bool | None, detail: str) -> None:
+        nonlocal problems
+        if ok is None:
+            table.add_row(name, "[dim]skip[/dim]", detail)
+            return
+        if not ok:
+            problems += 1
+        table.add_row(name, "[green]ok[/green]" if ok else "[red]FAIL[/red]", detail)
+
+    row("python", True, sys.version.split()[0])
+
+    configured = list(settings.provider_chain)
+    with_keys = [p for p in configured if settings.api_key(p) or p == "vllm"]
+    row(
+        "provider keys",
+        bool(with_keys),
+        f"chain {configured}; usable: {with_keys or 'none - set GROQ_API_KEY in .env'}",
+    )
+
+    for provider_id in with_keys:
+        if provider_id == "vllm":
+            continue
+        try:
+            served = _served_models(provider_id, settings)
+        except Exception as exc:
+            row(f"{provider_id} models", False, str(exc)[:90])
+            continue
+        wanted = settings.model_for(provider_id)
+        row(
+            f"{provider_id} model",
+            wanted in served,
+            wanted
+            if wanted in served
+            else f"{wanted!r} is not served. Free lineups rotate; see `papersynth models`.",
+        )
+
+    try:
+        alive = httpx.get(f"{settings.grobid_url}/api/isalive", timeout=5.0).status_code == 200
+    except httpx.HTTPError:
+        alive = False
+    row(
+        "grobid",
+        alive or None,
+        f"{settings.grobid_url}"
+        + ("" if alive else " unreachable - only the LaTeX path will work"),
+    )
+
+    row(
+        "pdftotext",
+        shutil.which("pdftotext") is not None,
+        shutil.which("pdftotext") or "install poppler-utils for the PDF fallback",
+    )
+
+    from papersynth.ingest.math_layer import build_recoverer
+
+    recoverer = build_recoverer(enabled=True)
+    row(
+        "math recovery",
+        recoverer.available or None,
+        "pix2tex ready"
+        if recoverer.available
+        else "not installed - damaged math is detected and flagged, not recovered",
+    )
+
+    for label, path in (
+        ("policy", settings.policy),
+        ("range rules", settings.range_rules),
+        ("checklist", settings.checklist),
+    ):
+        row(f"config: {label}", Path(path).exists(), str(path))
+
+    console.print(table)
+    if problems:
+        err.print(f"[red]{problems} check(s) failed.[/red]")
+        raise typer.Exit(1)
+    console.print("[green]Ready to run.[/green]")
+
+
+def _served_models(provider_id: str, settings: Any) -> set[str]:
+    key = settings.api_key(provider_id)
+    if provider_id == "gemini":
+        response = httpx.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": key or ""},
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        return {
+            m["name"].removeprefix("models/")
+            for m in response.json().get("models") or []
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        }
+
+    base = {
+        "groq": "https://api.groq.com/openai/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+    }[provider_id]
+    response = httpx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"}, timeout=20.0)
+    response.raise_for_status()
+    return {m.get("id", "") for m in response.json().get("data") or []}
 
 
 @app.command("eval-gaps")
