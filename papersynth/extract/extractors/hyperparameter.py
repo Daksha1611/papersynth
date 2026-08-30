@@ -94,6 +94,10 @@ class HyperparameterExtractor(LLMExtractor):
     version: ClassVar[str] = "1.0.0"
     payload_schema_name: ClassVar[str] = "payload.hyperparameter.json"
     output_schema: ClassVar[dict[str, Any]] = {"type": "array", "items": _ITEM_SCHEMA}
+    looks_for: ClassVar[str] = (
+        "configured numeric or categorical values an implementer must set: learning "
+        "rate, batch size, layer counts, optimizer, temperature, and the like"
+    )
     section_pattern: ClassVar[str] = (
         r"experiment|training|setup|implementation|method|model|detail|"
         r"configuration|hyperparam|appendix"

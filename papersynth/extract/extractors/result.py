@@ -67,6 +67,10 @@ class ResultExtractor(LLMExtractor):
     version: ClassVar[str] = "1.0.0"
     payload_schema_name: ClassVar[str] = "payload.result.json"
     output_schema: ClassVar[dict[str, Any]] = {"type": "array", "items": _ITEM_SCHEMA}
+    looks_for: ClassVar[str] = (
+        "reported measurements: benchmark scores, accuracies, error rates, costs, "
+        "with the dataset and conditions they were measured under"
+    )
     section_pattern: ClassVar[str] = (
         r"result|experiment|evaluation|benchmark|analysis|ablation|comparison|appendix"
     )

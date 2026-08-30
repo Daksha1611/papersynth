@@ -55,11 +55,22 @@ class ExtractionResult:
     claims: list[Claim] = field(default_factory=list)
     rejected: list[RejectedClaim] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Prompt batches attempted and how many returned usable output. A silent
+    #: 19-batch loss was invisible in the M8 run; these make it a number.
+    batches_total: int = 0
+    batches_ok: int = 0
+    #: Per-extractor coverage: extractor id -> (sections_read, sections_total,
+    #: batches_ok, batches_total). Populated by run_all so a thorough run and a
+    #: 1%-read run do not look identical in the output (item 4).
+    coverage: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
     def extend(self, other: ExtractionResult) -> None:
         self.claims.extend(other.claims)
         self.rejected.extend(other.rejected)
         self.warnings.extend(other.warnings)
+        self.batches_total += other.batches_total
+        self.batches_ok += other.batches_ok
+        self.coverage.update(other.coverage)
 
 
 @runtime_checkable
@@ -94,6 +105,9 @@ class LLMExtractor(ABC):
     payload_schema_name: ClassVar[str] = ""
     section_pattern: ClassVar[str] = ""
     system_prompt: ClassVar[str] = ""
+    #: One line describing what this extractor looks for, given to semantic
+    #: triage. Subclasses that leave it blank get a generic description.
+    looks_for: ClassVar[str] = ""
 
     def __init__(
         self,
@@ -150,17 +164,36 @@ class LLMExtractor(ABC):
     def extractor_version(self) -> str:
         return f"{self.claim_type}@{self.version}"
 
-    def applicable_sections(self, doc: StructuredDocument) -> list[Section]:
-        """Sections worth reading. Falls back to the whole paper if none match.
+    #: Set by extract() so run_all and the coverage artifact can report why
+    #: these sections were chosen.
+    _last_triage_reason: str = ""
 
-        Falling back rather than returning nothing is deliberate: a paper whose
-        headings do not match our regex still has hyperparameters in it, and
-        silently extracting nothing from it would look like a clean run.
+    def applicable_sections(self, doc: StructuredDocument) -> list[Section]:
+        """Sections worth reading.
+
+        The static regex is a pre-filter. When it already selects most of the
+        paper the paper is fixture-shaped and its answer stands; otherwise a
+        semantic pass looks at the actual section titles, because the regex
+        list cannot recognise relevance in an unfamiliar paper's vocabulary
+        (M8: "Threat Model", "Capabilities", "Attack Surface" match nothing).
         """
-        if not self.section_pattern:
-            return list(doc.sections)
-        matched = doc.sections_matching(self.section_pattern)
-        return matched or list(doc.sections)
+        from papersynth.extract.triage import triage
+
+        regex_selection = (
+            doc.sections_matching(self.section_pattern)
+            if self.section_pattern
+            else list(doc.sections)
+        )
+
+        selected, reason = triage(
+            doc,
+            claim_type=self.claim_type,
+            what=self.looks_for or f"claims of type {self.claim_type}",
+            regex_selection=regex_selection,
+            provider=self.provider,
+        )
+        self._last_triage_reason = reason
+        return selected or list(doc.sections)
 
     def extract(
         self, doc: StructuredDocument, sections: list[Section] | None = None
@@ -191,12 +224,32 @@ class LLMExtractor(ABC):
         precisely because the same facts presented in a different order is a
         genuinely different question to ask.
         """
+        from papersynth.core.errors import PaperSynthError
+
         result = ExtractionResult()
-        for batch in self.batch_sections(doc, sections):
+        batches = self.batch_sections(doc, sections)
+        result.batches_total += len(batches)
+
+        for batch in batches:
             ordered = _rotate(batch, rotation)
-            completion = self._call(self.build_prompt(doc, ordered), doc)
             section_indices = [s.index for s in ordered]
-            for item in _as_items(completion.parsed):
+            try:
+                completion = self._call(self.build_prompt(doc, ordered), doc)
+                items = _as_items(completion.parsed)
+            except PaperSynthError as exc:
+                # One malformed response used to abort the whole extractor -
+                # in the M8 run, a bad batch 1 discarded 19 valid batches for
+                # equation and algorithm on a paper with 78 equations. A
+                # failed batch now costs only its own sections.
+                titles = ", ".join(s.title for s in ordered)[:80]
+                result.warnings.append(
+                    f"{self.claim_type}: batch [{titles}] failed ({exc}); "
+                    "remaining batches still run"
+                )
+                continue
+
+            result.batches_ok += 1
+            for item in items:
                 self._admit(item, doc, section_indices, result)
         return result
 

@@ -57,6 +57,20 @@ def span_id(paper_id: str, section_index: int, paragraph_index: int, char_offset
     return f"{paper_id}#s{section_index}.p{paragraph_index}.{char_offset}"
 
 
+def scope_id(span: str) -> str:
+    """The section a span belongs to: ``{paper_id}#s{sec}``.
+
+    Claims that share a scope came from the same passage. That is the signal
+    section 10.1 needs: several count-valued facts from one section of one
+    paper - a study's sample sizes, say - are stages of one described
+    procedure, not independent settings that happen to disagree.
+    """
+    head, _, tail = span.partition("#s")
+    if not tail:
+        return span
+    return f"{head}#s{tail.split('.', 1)[0]}"
+
+
 def cluster_id(concept_type: str, canonical_name: str) -> str:
     return f"cnc_{slugify(concept_type)[:4]}_{slugify(canonical_name)}"
 

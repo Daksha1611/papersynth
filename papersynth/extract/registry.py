@@ -84,11 +84,22 @@ def run_all(
     claim set with a visible gap beats no claim set at all.
     """
     result = ExtractionResult()
+    total_sections = len(doc.sections)
     for extractor in extractors:
+        read = len(extractor.applicable_sections(doc))
         try:
-            result.extend(extractor.extract(doc))
+            one = extractor.extract(doc)
         except PaperSynthError as exc:
             result.warnings.append(f"{extractor.extractor_version} failed on {doc.paper_id}: {exc}")
+            result.coverage[extractor.extractor_version] = (read, total_sections, 0, 0)
+            continue
+        result.coverage[extractor.extractor_version] = (
+            read,
+            total_sections,
+            one.batches_ok,
+            one.batches_total,
+        )
+        result.extend(one)
     return result
 
 

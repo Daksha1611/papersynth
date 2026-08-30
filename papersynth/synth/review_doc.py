@@ -19,6 +19,7 @@ def render(
     reconciliation: ReconciliationResult | None,
     gaps: list[Gap],
     blocking: list[str],
+    coverage: dict[str, dict[str, tuple[int, int, int, int]]] | None = None,
 ) -> str:
     lines: list[str] = [
         f"# Spec review - {spec['run_id']}",
@@ -70,6 +71,35 @@ def render(
         ]
     else:
         lines += ["## No blocking conflicts", "", "The spec can be emitted.", ""]
+
+    if coverage:
+        thin = [
+            (pid, ex, r, t)
+            for pid, per in coverage.items()
+            for ex, (r, t, _bo, _bt) in per.items()
+            if t and r / t < 0.25
+        ]
+        lost = [
+            (pid, ex, bo, bt)
+            for pid, per in coverage.items()
+            for ex, (_r, _t, bo, bt) in per.items()
+            if bt and bo < bt
+        ]
+        lines += ["## Extraction coverage", ""]
+        if thin or lost:
+            lines += [
+                "Some extractors read a small fraction of a paper or lost batches "
+                "to failed calls. Claims from those papers are partial, and their "
+                "absence from the spec is not evidence the paper lacks them.",
+                "",
+            ]
+        for pid, ex, r, t in sorted(thin):
+            lines.append(f"- **{pid}** / {ex.split('@')[0]}: read {r}/{t} sections ({r / t:.0%})")
+        for pid, ex, bo, bt in sorted(lost):
+            lines.append(f"- **{pid}** / {ex.split('@')[0]}: {bt - bo} of {bt} batches failed")
+        if not (thin or lost):
+            lines.append("All extractors read a substantial share of every paper.")
+        lines.append("")
 
     open_conflicts = spec.get("open_conflicts", [])
     lines += [

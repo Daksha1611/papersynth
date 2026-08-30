@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from papersynth.core import ids
 
@@ -81,6 +81,16 @@ class Provenance(_Model):
     extractor_version: str
     confidence: float = Field(ge=0.0, le=1.0)
     secondary: SecondaryProvenance | None = None
+    #: The section this claim came from. Claims sharing a scope were extracted
+    #: from the same passage, which is how section 10.1 tells "stages of one
+    #: procedure" apart from "independent facts that disagree".
+    scope_id: str = ""
+
+    @model_validator(mode="after")
+    def _derive_scope(self) -> Provenance:
+        if not self.scope_id and self.span_id:
+            object.__setattr__(self, "scope_id", ids.scope_id(self.span_id))
+        return self
 
     @field_validator("quote_hash")
     @classmethod
@@ -150,6 +160,10 @@ class Claim(_Model):
     def is_usable(self) -> bool:
         """Only verified claims may drive auto-resolution (section 8.3.4)."""
         return self.status == "verified"
+
+    @property
+    def scope_id(self) -> str:
+        return self.provenance.scope_id
 
 
 class ClaimSet(_Model):

@@ -246,3 +246,64 @@ results whose reported variances overlap are not treated as conflicting.
 Agreement within stated uncertainty is agreement, and reporting it would ask a
 reviewer to adjudicate noise. Where no paper states a variance, a difference is
 reported, because there is then no basis for calling it noise.
+
+---
+
+## M8 corrections (items 1-4 and 6)
+
+The first out-of-domain corpus produced four correctness defects and one
+noise defect. Details in `docs/m8-findings.md`; the fixes:
+
+### §10.1 internal_consistency, and scope on every claim
+
+Implemented. Every claim now carries `provenance.scope_id` - the section it
+came from. `SpecBuilder` splits verified hyperparameters into recognized
+training settings (which collapse to `cmp_global` as before) and unrecognized
+quantities, and the latter, when two or more share one section of one paper,
+are emitted under a component named for that section with each value scoped to
+it. The `internal_consistency` hook detects the pattern in the verify stage
+and records it.
+
+This is the M8 failure fixed at the source. Kunzel's field experiment reports
+68,378 voters, 1,295 households, 913 treated, 501 final - a funnel. Flattened
+into independent config those numbers contradict, and the coding agent said
+so. Scoped to their section they read as what they are.
+
+### §7.4 components carry design decisions
+
+`_components` filtered `claim.type != "hyperparameter"`, written before the
+method and result types. 27 of 39 verified M8 claims never reached the
+deliverable. Components now carry a `design_decisions[]` array populated from
+method claims, grouped by `applies_to`; result claims already fed
+`expected_results`.
+
+### NFR-09 at batch granularity
+
+`registry.run_all` caught per extractor. One malformed response on batch 1
+discarded 19 valid batches for equation and algorithm on a paper with 78
+equations. The batch loop now catches per batch: a failed batch is a warning
+and zero claims for its sections, and the rest run. `run_all` records
+per-extractor coverage - sections read against total, batches ok against total
+- carried into `coverage.yaml`, the CLI summary and SPEC_REVIEW.md. A thorough
+run and a 1%-read run no longer look identical.
+
+### §8.1 semantic section triage
+
+Chosen: per-extractor, gated by a regex pre-filter. The static regex list was
+BERT-shaped and matched almost nothing on the M8 papers, and the fallback only
+fires when nothing matches, so a partial match left them 96-99% unread in
+silence. `applicable_sections` now runs the regex as a pre-filter; when it
+covers under 60% of the paper and a provider is available, one classification
+call per extractor per paper decides relevance from the actual section titles.
+Per-extractor rather than shared because "relevant to hyperparameter
+extraction" and "relevant to method extraction" do not carve a paper the same
+way; merge to a shared map only if the cost becomes real at scale. Skipped
+entirely for papers under six sections. Cost: one call per extractor per paper
+when triggered, ~35 in the M8 corpus against ~46 for the whole run.
+
+### §13.2 checklist gate
+
+Pass A's ML-training section gated on `any_hyperparameter`, which a field
+experiment's sample counts satisfy. 9 of 13 M8 gaps were "no learning rate /
+optimizer / dropout" on an agent-architecture corpus. The gate now requires a
+recognized training hyperparameter, not any hyperparameter.

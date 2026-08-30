@@ -82,6 +82,10 @@ class MethodExtractor(LLMExtractor):
     version: ClassVar[str] = "1.0.0"
     payload_schema_name: ClassVar[str] = "payload.method.json"
     output_schema: ClassVar[dict[str, Any]] = {"type": "array", "items": _ITEM_SCHEMA}
+    looks_for: ClassVar[str] = (
+        "design decisions - which approach was taken to a sub-problem: objective, "
+        "architecture choice, tokenizer, enforcement mechanism, evaluation protocol"
+    )
     section_pattern: ClassVar[str] = (
         r"method|model|architecture|approach|objective|pre-?training|training|"
         r"setup|design|ablation|analysis|implementation"

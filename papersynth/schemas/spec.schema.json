@@ -73,6 +73,23 @@
           },
           "algorithms": { "type": "array", "items": { "type": "object" } },
           "equations": { "type": "array", "items": { "type": "object" } },
+          "design_decisions": {
+            "type": "array",
+            "description": "Approach choices this component makes (section 7.4). A design decision carries no value to configure, so it lives here rather than under hyperparameters.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sub_problem": { "type": "string" },
+                "approach": { "type": "string" },
+                "adopted": { "type": "boolean" },
+                "rationale": { "type": ["string", "null"] },
+                "alternatives_rejected": { "type": "array", "items": { "type": "string" } },
+                "provenance_refs": { "$ref": "#/$defs/provenance_refs" }
+              },
+              "required": ["sub_problem", "approach", "adopted", "provenance_refs"],
+              "additionalProperties": false
+            }
+          },
           "hyperparameters": {
             "type": "array",
             "items": {

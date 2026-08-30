@@ -61,6 +61,10 @@
           "pattern": "^[a-z_]+@[0-9]+\\.[0-9]+\\.[0-9]+$"
         },
         "confidence": { "$ref": "#/$defs/confidence" },
+        "scope_id": {
+          "type": "string",
+          "description": "The section a claim came from ({paper_id}#s{sec}). Claims sharing a scope were extracted from one passage; section 10.1 uses this to tell stages of one procedure from independent facts."
+        },
         "secondary": {
           "type": ["object", "null"],
           "description": "Set when the claim is attributed to a work cited by this paper.",

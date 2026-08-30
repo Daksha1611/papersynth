@@ -60,9 +60,38 @@ class ChecklistGroup:
         """
         if self.applies_when == "always":
             return True
-        if self.applies_when == "any_hyperparameter":
-            return any(c.type == "hyperparameter" for c in claims)
+        if self.applies_when in ("any_hyperparameter", "trains_a_model"):
+            # Gate on evidence the corpus actually trains a model, not on any
+            # hyperparameter at all. M8 tripped this with a field experiment's
+            # sample sizes and got asked for a learning rate, an optimizer and
+            # a dropout rate on an agent-architecture corpus - 9 of 13 gaps
+            # were that noise.
+            return any(
+                c.type == "hyperparameter"
+                and str(c.payload.get("canonical_name") or "") in _TRAINING_NAMES
+                for c in claims
+            )
         return True
+
+
+#: Names whose presence indicates a model is being trained by
+#: gradient descent - as distinct from a paper that merely reports counts.
+_TRAINING_NAMES = frozenset(
+    {
+        "learning_rate",
+        "batch_size",
+        "num_epochs",
+        "num_steps",
+        "optimizer",
+        "weight_decay",
+        "warmup_steps",
+        "gradient_clip",
+        "dropout",
+        "momentum",
+        "label_smoothing",
+        "weight_initialization",
+    }
+)
 
 
 @dataclass

@@ -181,31 +181,75 @@ class TestNormalization:
 
 
 class TestSectionNarrowing:
-    def test_applicable_sections_narrows_the_search(self):
-        """Cost and precision both improve when the prompt skips related work."""
+    def _paper(self, *titles):
         from papersynth.core.document import Paragraph, Section, StructuredDocument
 
-        doc = StructuredDocument(
+        return StructuredDocument(
             paper_id="narrow.001",
             title="Narrowing",
             ingest_method="latex",
             sha256="e" * 64,
             sections=[
-                Section(
-                    index=0,
-                    title="2 Related Work",
-                    paragraphs=[Paragraph(index=0, text="Prior systems are surveyed here.")],
-                ),
-                Section(
-                    index=1,
-                    title="4 Training Setup",
-                    paragraphs=[Paragraph(index=0, text="We use a batch size of 64 here.")],
-                ),
+                Section(index=i, title=t, paragraphs=[Paragraph(index=0, text=f"text of {t}")])
+                for i, t in enumerate(titles)
             ],
         )
-        sections = HyperparameterExtractor(StubProvider([[]])).applicable_sections(doc)
 
-        assert [s.title for s in sections] == ["4 Training Setup"]
+    def test_a_confident_regex_match_skips_semantic_triage(self):
+        """A fixture-shaped paper needs no extra call: the regex already covers
+        most of it."""
+        doc = self._paper(
+            "Experimental Setup", "Training Details", "Implementation", "Model Configuration"
+        )
+        provider = StubProvider([[]])
+        sections = HyperparameterExtractor(provider).applicable_sections(doc)
+
+        assert len(sections) == 4
+        assert provider.call_count == 0, "no triage call when regex is confident"
+
+    def test_an_unfamiliar_paper_is_triaged_semantically(self):
+        """The M8 case: titles that match no regex still get narrowed, by
+        asking the model which sections are relevant."""
+        doc = self._paper(
+            "Threat Model",
+            "Capabilities",
+            "Data Flow Security",
+            "Attack Surface",
+            "Related Work",
+            "Limitations",
+            "Conclusion",
+        )
+        provider = StubProvider(
+            [
+                {"relevant_sections": [0, 2, 3], "reason": "security mechanism sections"},
+                [],
+            ]
+        )
+        ex = HyperparameterExtractor(provider)
+        sections = ex.applicable_sections(doc)
+
+        assert {s.title for s in sections} == {
+            "Threat Model",
+            "Data Flow Security",
+            "Attack Surface",
+        }
+        assert "semantic triage" in ex._last_triage_reason
+
+    def test_a_small_paper_is_read_whole_without_a_call(self):
+        doc = self._paper("Method", "Results")
+        provider = StubProvider([[]])
+        sections = HyperparameterExtractor(provider).applicable_sections(doc)
+
+        assert len(sections) == 2
+        assert provider.call_count == 0
+
+    def test_triage_returning_nothing_falls_back_to_regex(self):
+        doc = self._paper("Setup", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta")
+        provider = StubProvider([{"relevant_sections": [], "reason": "unsure"}, []])
+        ex = HyperparameterExtractor(provider)
+        sections = ex.applicable_sections(doc)
+
+        assert sections, "must not read zero sections on an empty triage answer"
 
     def test_a_paper_with_no_matching_headings_still_gets_read(self):
         """Returning nothing here would look like a clean run on a real paper."""

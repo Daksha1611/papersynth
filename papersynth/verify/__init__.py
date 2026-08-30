@@ -24,16 +24,20 @@ from papersynth.verify.citation_trace import (
     check_numeric_literal,
     trace,
 )
+from papersynth.verify.internal_consistency import ScopeFinding
+from papersynth.verify.internal_consistency import review as review_consistency
 from papersynth.verify.range_check import CheckOutcome, RangeRules
 from papersynth.verify.symbol_check import symbol_check
 
 __all__ = [
     "CheckOutcome",
     "RangeRules",
+    "ScopeFinding",
     "TraceResult",
     "VerificationReport",
     "Verifier",
     "check_numeric_literal",
+    "review_consistency",
     "symbol_check",
     "trace",
 ]
@@ -51,6 +55,9 @@ class VerificationReport:
     #: Passed every check but did not clear the confidence threshold, usually
     #: because re-extractions disagreed. Neither verified nor rejected.
     low_confidence: int = 0
+    #: Sections whose several distinct quantities were scoped together rather
+    #: than reported as inconsistent globals (section 10.1).
+    scoped_sections: int = 0
     rejection_reasons: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -96,6 +103,15 @@ class Verifier:
             self._verify_one(claim, doc, report, entailments.get(claim.claim_id))
             for claim in claims.claims
         ]
+
+        for finding in review_consistency(verified):
+            report.scoped_sections += 1
+            report.notes.append(finding.note)
+            for claim in verified:
+                if claim.claim_id in finding.claim_ids:
+                    claim.verification.notes.append(
+                        f"scope-bound to section {finding.section!r} (section 10.1)"
+                    )
 
         return (
             ClaimSet(paper_id=claims.paper_id, claims=verified, warnings=claims.warnings),

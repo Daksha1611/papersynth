@@ -260,7 +260,28 @@ def _print_run_summary(result: Any, root: Path) -> None:
     table.add_row("provenance", f"{result.provenance_completeness:.0%}")
     console.print(table)
 
-    for warning in result.warnings[:5]:
+    if getattr(result, "coverage", None):
+        console.print()
+        cov = Table(title="Extraction coverage", show_header=True, box=None)
+        cov.add_column("paper", style="cyan")
+        cov.add_column("extractor")
+        cov.add_column("sections read", justify="right")
+        cov.add_column("batches ok", justify="right")
+        for paper_id, per_ex in sorted(result.coverage.items()):
+            for ex, (read, tot, bo, bt) in sorted(per_ex.items()):
+                pct = f"{read}/{tot} ({read / tot:.0%})" if tot else "-"
+                thin = tot and read / tot < 0.25
+                batches = f"{bo}/{bt}" if bt else "-"
+                lost = bt and bo < bt
+                cov.add_row(
+                    paper_id,
+                    ex.split("@")[0],
+                    f"[red]{pct}[/red]" if thin else pct,
+                    f"[red]{batches}[/red]" if lost else batches,
+                )
+        console.print(cov)
+
+    for warning in result.warnings[:8]:
         console.print(f"[yellow]warning:[/yellow] {warning}")
 
     summary = (result.spec or {}).get("verification_summary", {})

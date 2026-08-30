@@ -905,3 +905,495 @@ class TestR014DetectorRanOnTheWrongClaimType:
 
         types = [d.claim_type for d in DETECTORS.values()]
         assert len(types) == len(set(types))
+
+
+# NOTE ON NUMBERING: the instructions asked for R011/R012 for these, but those
+# ids are already taken (failed-ingest accounting, arXiv rate limiting). Using
+# R015-R018 to avoid the collision; the mapping is:
+#   R015 = manufactured contradiction from one study design
+#   R016 = SpecBuilder dropping method/result claims
+#   R017 = per-batch extraction failure losing the rest
+#   R018 = semantic triage on a paper with no regex-matching titles
+
+
+def _kunzel_funnel_claims():
+    """The four M8 numbers, all from one section of one paper."""
+    from papersynth.core import ids
+    from papersynth.core.models import Claim, Provenance
+
+    section = "Reducing transphobia: A field experiment on door-to-door canvassing"
+    out = {}
+    for name, value in [
+        ("registered_voters", 68378),
+        ("randomization_households", 1295),
+        ("treatment_group_size", 913),
+        ("final_sample_size", 501),
+    ]:
+        claim = Claim.build(
+            paper_id="1706.03461",
+            claim_type="hyperparameter",
+            provenance=Provenance(
+                paper_id="1706.03461",
+                span_id="1706.03461#s7.p2.40",
+                section=section,
+                page=8,
+                char_start=0,
+                char_end=40,
+                quote_hash=ids.quote_hash(str(value)),
+                extraction_method="llm",
+                extractor_version="hyperparameter@1.0.0",
+                confidence=0.9,
+            ),
+            payload={
+                "canonical_name": name,
+                "paper_symbol": None,
+                "value": value,
+                "value_type": "int",
+                "unit": None,
+                "applies_to": name.split("_")[0],
+                "condition": None,
+                "stated_explicitly": True,
+            },
+        )
+        claim.status = "verified"
+        out[claim.claim_id] = claim
+    return out
+
+
+class TestR015ManufacturedContradictionFromStudyDesign:
+    """Seven Kunzel numbers from one section - a field experiment's funnel -
+    were flattened into independent cmp_global hyperparameters. Read that way
+    they contradict: 913 treated out of a 501 sample. A coding agent handed the
+    spec correctly flagged it, and the inconsistency was the pipeline's, not
+    the paper's.
+
+    Fixed at the source: claims carry a scope_id, and unrecognized quantities
+    that cluster within one section are emitted under a section-named component
+    that says they describe one context, each scoped to that section."""
+
+    def build(self):
+        from papersynth.synth import SpecBuilder
+        from tests.conftest import make_doc
+
+        claims = _kunzel_funnel_claims()
+        return SpecBuilder(
+            run_id="r", objective="o", documents=[make_doc("1706.03461")], claims=claims
+        ).build(contradictions=[], gaps=[])
+
+    def test_the_funnel_does_not_land_in_global_config(self):
+        spec = self.build()
+        glob = next((c for c in spec["components"] if c["component_id"] == "cmp_global"), None)
+        glob_hps = {h["canonical_name"] for h in (glob or {}).get("hyperparameters", [])}
+        assert "treatment_group_size" not in glob_hps
+        assert "final_sample_size" not in glob_hps
+
+    def test_the_four_values_share_one_scoped_component(self):
+        spec = self.build()
+        holders = [
+            c
+            for c in spec["components"]
+            if {"treatment_group_size", "final_sample_size"}
+            <= {h["canonical_name"] for h in c.get("hyperparameters", [])}
+        ]
+        assert len(holders) == 1, "the funnel must be presented together, not split"
+        assert "describe one context" in holders[0]["role"]
+
+    def test_each_value_is_scoped_to_its_section(self):
+        spec = self.build()
+        for c in spec["components"]:
+            for h in c.get("hyperparameters", []):
+                if h["canonical_name"] in ("treatment_group_size", "final_sample_size"):
+                    assert h["condition"] and "field experiment" in h["condition"]
+
+    def test_no_contradiction_of_any_kind_is_emitted(self):
+        spec = self.build()
+        assert spec["open_conflicts"] == []
+        assert spec["resolved_conflicts"] == []
+
+    def test_the_spec_still_validates(self):
+        from papersynth.schemas import validate
+
+        assert validate(self.build(), "spec.schema.json") == []
+
+    def test_the_internal_consistency_hook_flags_it(self):
+        from papersynth.verify.internal_consistency import review
+
+        findings = review(list(_kunzel_funnel_claims().values()))
+        assert len(findings) == 1
+        assert "field experiment" in findings[0].section
+        assert len(findings[0].claim_ids) == 4
+
+    def test_recognized_settings_are_untouched(self):
+        """A BERT-shaped spec must still collapse lr/dropout/batch_size to one
+        global component."""
+        from papersynth.synth import SpecBuilder
+        from tests.conftest import make_claim, make_doc
+
+        doc = make_doc("p1")
+        claims = {
+            c.claim_id: c
+            for c in (
+                make_claim(doc, canonical_name=n, value=v, condition=None)
+                for n, v in [("learning_rate", 1e-4), ("dropout", 0.1), ("batch_size", 64)]
+            )
+        }
+        spec = SpecBuilder(run_id="r", objective="o", documents=[doc], claims=claims).build(
+            contradictions=[], gaps=[]
+        )
+        assert [c["component_id"] for c in spec["components"]] == ["cmp_global"]
+
+
+class TestR016SpecBuilderDropsMethodAndResultClaims:
+    """_components filtered `claim.type != "hyperparameter"` - written before
+    method and result types existed. 27 of 39 verified claims in the M8 run
+    were invisible in the deliverable because of that one line."""
+
+    def build_with_all_types(self):
+        from papersynth.core import ids
+        from papersynth.core.models import Claim, Provenance
+        from papersynth.synth import SpecBuilder
+        from tests.conftest import make_doc
+
+        doc = make_doc("p1")
+        claims = {}
+
+        def add(ctype, payload):
+            c = Claim.build(
+                paper_id="p1",
+                claim_type=ctype,
+                provenance=Provenance(
+                    paper_id="p1",
+                    span_id="p1#s1.p0.0",
+                    section="Method",
+                    page=1,
+                    char_start=0,
+                    char_end=20,
+                    quote_hash=ids.quote_hash("x"),
+                    extraction_method="llm",
+                    extractor_version=f"{ctype}@1.0.0",
+                    confidence=0.9,
+                ),
+                payload=payload,
+            )
+            c.status = "verified"
+            claims[c.claim_id] = c
+
+        add(
+            "hyperparameter",
+            {
+                "canonical_name": "learning_rate",
+                "paper_symbol": None,
+                "value": 0.0001,
+                "value_type": "float",
+                "unit": None,
+                "applies_to": "global",
+                "condition": None,
+                "stated_explicitly": True,
+            },
+        )
+        add(
+            "method",
+            {
+                "sub_problem": "positional_encoding",
+                "approach": "learned absolute",
+                "adopted": True,
+                "alternatives_rejected": [],
+                "rationale": "extrapolates poorly anyway",
+                "attribution": "own",
+                "applies_to": "global",
+                "condition": None,
+                "stated_explicitly": True,
+            },
+        )
+        add(
+            "result",
+            {
+                "metric": "bleu",
+                "value": 27.3,
+                "dataset": "WMT14 EN-DE",
+                "split": "newstest2014",
+                "model_variant": "base",
+                "conditions": {},
+                "reported_variance": None,
+                "stated_explicitly": True,
+            },
+        )
+
+        return SpecBuilder(run_id="r", objective="o", documents=[doc], claims=claims).build(
+            contradictions=[], gaps=[]
+        )
+
+    def test_all_three_claim_types_appear_in_the_spec(self):
+        spec = self.build_with_all_types()
+
+        hp_names = {
+            h["canonical_name"] for c in spec["components"] for h in c.get("hyperparameters", [])
+        }
+        dd_subs = {
+            d["sub_problem"] for c in spec["components"] for d in c.get("design_decisions", [])
+        }
+        result_metrics = {r["metric"] for r in spec["expected_results"]}
+
+        assert "learning_rate" in hp_names, "hyperparameter dropped"
+        assert "positional_encoding" in dd_subs, "method claim dropped"
+        assert "bleu" in result_metrics, "result claim dropped"
+
+    def test_a_method_only_component_is_still_emitted(self):
+        """The M8 shape: components with design decisions and no numbers."""
+        spec = self.build_with_all_types()
+        method_components = [c for c in spec["components"] if c.get("design_decisions")]
+        assert method_components
+
+    def test_design_decisions_carry_their_rationale(self):
+        spec = self.build_with_all_types()
+        dd = next(
+            d
+            for c in spec["components"]
+            for d in c.get("design_decisions", [])
+            if d["sub_problem"] == "positional_encoding"
+        )
+        assert dd["rationale"] and "extrapolates" in dd["rationale"]
+        assert dd["provenance_refs"]
+
+    def test_prior_work_method_claims_are_not_emitted(self):
+        """A background description of a predecessor is not this paper's
+        decision."""
+        from papersynth.core import ids
+        from papersynth.core.models import Claim, Provenance
+        from papersynth.synth import SpecBuilder
+        from tests.conftest import make_doc
+
+        c = Claim.build(
+            paper_id="p1",
+            claim_type="method",
+            provenance=Provenance(
+                paper_id="p1",
+                span_id="p1#s1.p0.0",
+                section="Related Work",
+                page=1,
+                char_start=0,
+                char_end=20,
+                quote_hash=ids.quote_hash("x"),
+                extraction_method="llm",
+                extractor_version="method@1.0.0",
+                confidence=0.9,
+            ),
+            payload={
+                "sub_problem": "tokenizer",
+                "approach": "wordpiece",
+                "adopted": True,
+                "alternatives_rejected": [],
+                "rationale": None,
+                "attribution": "prior_work",
+                "applies_to": "global",
+                "condition": None,
+                "stated_explicitly": True,
+            },
+        )
+        c.status = "verified"
+        spec = SpecBuilder(
+            run_id="r", objective="o", documents=[make_doc("p1")], claims={c.claim_id: c}
+        ).build(contradictions=[], gaps=[])
+
+        subs = {
+            d["sub_problem"]
+            for comp in spec["components"]
+            for d in comp.get("design_decisions", [])
+        }
+        assert "tokenizer" not in subs
+
+
+class TestR017PerBatchExtractionFailure:
+    """registry.run_all caught per extractor, not per batch. In the M8 run a
+    malformed JSON response on batch 1 discarded 19 valid batches for equation
+    and algorithm on Kunzel - a paper with 78 equations and 9 algorithms that
+    contributed zero."""
+
+    def _many_section_doc(self):
+        from papersynth.core.document import Paragraph, Section, StructuredDocument
+
+        return StructuredDocument(
+            paper_id="batch.001",
+            title="Many sections",
+            ingest_method="latex",
+            sha256="a" * 64,
+            math_fidelity="latex_native",
+            sections=[
+                Section(
+                    index=i,
+                    title=f"Section {i}",
+                    paragraphs=[
+                        Paragraph(
+                            index=0,
+                            text=f"We set a learning rate of 0.000{i + 1} in section {i}." * 60,
+                        )
+                    ],
+                )
+                for i in range(8)
+            ],
+        )
+
+    def _responder(self, fail_batches=(1,)):
+        """Triage picks all sections; the named batches raise as a real
+        provider would on unparseable output."""
+        from papersynth.core.errors import SchemaValidationError
+
+        state = {"batch": 0}
+
+        def respond(prompt):
+            if "relevant_sections" in prompt:
+                return {"relevant_sections": list(range(8)), "reason": "all"}
+            state["batch"] += 1
+            if state["batch"] in fail_batches:
+                raise SchemaValidationError("stub", ["not valid JSON"])
+            return [
+                {
+                    "canonical_name": "learning_rate",
+                    "value": 0.0001,
+                    "value_type": "float",
+                    "condition": None,
+                    "stated_explicitly": True,
+                    "quote": "learning rate of 0.0001",
+                }
+            ]
+
+        return respond
+
+    def test_one_bad_batch_does_not_lose_the_others(self):
+        from papersynth.extract.extractors.hyperparameter import HyperparameterExtractor
+        from papersynth.llm.stub import StubProvider
+
+        result = HyperparameterExtractor(StubProvider(self._responder(fail_batches=(1,)))).extract(
+            self._many_section_doc()
+        )
+
+        assert result.batches_total >= 2
+        assert result.batches_ok == result.batches_total - 1
+        assert any("failed" in w and "remaining batches still run" in w for w in result.warnings)
+        assert result.claims, "the batches that succeeded still produced claims"
+
+    def test_batch_counts_are_reported_even_when_all_fail(self):
+        from papersynth.extract import registry
+        from papersynth.llm.stub import StubProvider
+
+        provider = StubProvider(self._responder(fail_batches=(1, 2, 3, 4, 5, 6)))
+        result = registry.run_all(
+            self._many_section_doc(), registry.build(["hyperparameter"], provider)
+        )
+
+        assert "hyperparameter@1.0.0" in result.coverage
+        _read, total, bo, bt = result.coverage["hyperparameter@1.0.0"]
+        assert total == 8
+        assert bt >= 1 and bo < bt
+
+
+class TestR018SemanticTriageOnUnfamiliarPaper:
+    """applicable_sections matched a BERT-shaped regex list. CaMeL's real
+    section titles - "Threat Model", "Capabilities", "Data Flow Security" -
+    match none of it, and the fallback only fires when NOTHING matches, so a
+    partial match left the paper 96-99% unread in silence.
+
+    Semantic triage replaces the regex judgement when the regex is not
+    confident."""
+
+    #: CaMeL's actual top-level section titles, lightly trimmed.
+    CAMEL_TITLES = [
+        "Introduction",
+        "Background and Threat Model",
+        "The CaMeL System",
+        "Capabilities and the Capability Model",
+        "The Custom Python Interpreter",
+        "Security Policies",
+        "Data Flow Graph Construction",
+        "Evaluation",
+        "Related Work",
+        "Limitations",
+        "Conclusion",
+    ]
+
+    def _camel_doc(self):
+        from papersynth.core.document import Paragraph, Section, StructuredDocument
+
+        return StructuredDocument(
+            paper_id="2503.18813",
+            title="CaMeL",
+            ingest_method="latex",
+            sha256="b" * 64,
+            math_fidelity="latex_native",
+            sections=[
+                Section(index=i, title=t, paragraphs=[Paragraph(index=0, text=f"content of {t}")])
+                for i, t in enumerate(self.CAMEL_TITLES)
+            ],
+        )
+
+    def test_regex_alone_matches_almost_nothing(self):
+        """The premise: the static list is BERT-shaped."""
+        doc = self._camel_doc()
+        from papersynth.extract.extractors.method import MethodExtractor
+
+        pattern = MethodExtractor.section_pattern
+        matched = doc.sections_matching(pattern)
+        # method's pattern is broad; even so it should not cover the paper.
+        assert len(matched) < len(doc.sections)
+
+    def test_semantic_triage_selects_the_relevant_sections(self):
+        from papersynth.extract.extractors.method import MethodExtractor
+        from papersynth.llm.stub import StubProvider
+
+        doc = self._camel_doc()
+        # The model, shown real titles, picks the mechanism sections.
+        provider = StubProvider(
+            [
+                {"relevant_sections": [2, 3, 4, 5, 6], "reason": "system mechanism sections"},
+                [],
+            ]
+        )
+        ex = MethodExtractor(provider)
+        selected = ex.applicable_sections(doc)
+
+        titles = {s.title for s in selected}
+        assert "The CaMeL System" in titles
+        assert "Security Policies" in titles
+        assert "Related Work" not in titles
+        assert "semantic triage" in ex._last_triage_reason
+
+    def test_a_failed_triage_falls_back_not_aborts(self):
+        from papersynth.core.errors import ProviderError
+        from papersynth.extract.extractors.method import MethodExtractor
+        from papersynth.llm.stub import StubProvider
+
+        doc = self._camel_doc()
+        ex = MethodExtractor(StubProvider(error=ProviderError("triage down")))
+        selected = ex.applicable_sections(doc)
+
+        assert selected, "must return sections even when triage fails"
+        assert "failed" in ex._last_triage_reason or "regex" in ex._last_triage_reason
+
+    def test_a_fixture_shaped_paper_skips_the_triage_call(self):
+        from papersynth.core.document import Paragraph, Section, StructuredDocument
+        from papersynth.extract.extractors.hyperparameter import HyperparameterExtractor
+        from papersynth.llm.stub import StubProvider
+
+        doc = StructuredDocument(
+            paper_id="bert.001",
+            title="BERT-ish",
+            ingest_method="latex",
+            sha256="c" * 64,
+            sections=[
+                Section(index=i, title=t, paragraphs=[Paragraph(index=0, text=f"t {t}")])
+                for i, t in enumerate(
+                    [
+                        "Experimental Setup",
+                        "Training Details",
+                        "Implementation",
+                        "Model Configuration",
+                        "Hyperparameters",
+                        "Appendix Setup",
+                    ]
+                )
+            ],
+        )
+        provider = StubProvider([[]])
+        HyperparameterExtractor(provider).applicable_sections(doc)
+
+        assert provider.call_count == 0, "no triage call for a fixture-shaped paper"

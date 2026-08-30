@@ -30,6 +30,40 @@ from papersynth.core.models import (
 )
 from papersynth.verify import VerificationReport
 
+#: canonical_names the pipeline recognizes as genuine training/config settings.
+#: A claim outside this set that shares a section with other such claims from
+#: one paper is a described quantity - a study's sample sizes, an experiment's
+#: durations - not an independent global setting (section 10.1).
+_KNOWN_SETTINGS = frozenset(
+    {
+        "learning_rate",
+        "batch_size",
+        "dropout",
+        "weight_decay",
+        "optimizer",
+        "num_layers",
+        "num_heads",
+        "hidden_dim",
+        "embed_dim",
+        "num_epochs",
+        "num_steps",
+        "warmup_steps",
+        "sequence_length",
+        "vocab_size",
+        "beam_size",
+        "temperature",
+        "top_p",
+        "gradient_clip",
+        "momentum",
+        "label_smoothing",
+        "weight_initialization",
+        "random_seed",
+        "activation_function",
+        "layernorm_epsilon",
+        "attention_heads",
+    }
+)
+
 
 class SpecBuilder:
     """Assembles the spec from the artifacts of stages 0-6."""
@@ -197,26 +231,29 @@ class SpecBuilder:
         superseded: set[str],
         reconciliation: ReconciliationResult | None,
     ) -> list[dict[str, Any]]:
-        grouped: dict[str, list[Claim]] = defaultdict(list)
-        for claim in self.claims.values():
-            if claim.status != "verified" or claim.type != "hyperparameter":
-                continue
-            grouped[str(claim.payload.get("applies_to") or "global")].append(claim)
+        hp_claims = [
+            c
+            for c in self.claims.values()
+            if c.status == "verified"
+            and c.type == "hyperparameter"
+            and not _is_disputed(c, disputed)
+            and c.claim_id not in superseded
+        ]
 
-        components = []
-        for target, claims in sorted(grouped.items()):
-            # A value still under dispute must not be emitted as settled; it
-            # appears in open_conflicts instead, for the implementer.
-            settled = [
-                c for c in claims if not _is_disputed(c, disputed) and c.claim_id not in superseded
-            ]
-            hyperparameters = self._merge_agreeing(settled, reconciliation)
-            refs = sorted({c.claim_id for c in claims})
+        recognized, scoped = _partition_by_recognition(hp_claims)
+
+        components: list[dict[str, Any]] = []
+
+        # Recognized training settings, grouped by the component they configure.
+        by_target: dict[str, list[Claim]] = defaultdict(list)
+        for claim in recognized:
+            by_target[str(claim.payload.get("applies_to") or "global")].append(claim)
+        for target, claims in sorted(by_target.items()):
             components.append(
                 {
-                    "component_id": (
-                        "cmp_global" if target == "global" else ids.component_id(target)
-                    ),
+                    "component_id": "cmp_global"
+                    if target == "global"
+                    else ids.component_id(target),
                     "name": "Global configuration" if target == "global" else target,
                     "role": (
                         "Configuration applying across the implementation."
@@ -224,12 +261,94 @@ class SpecBuilder:
                         else f"Configuration for {target}."
                     ),
                     "depends_on": [],
-                    "hyperparameters": hyperparameters,
+                    "hyperparameters": self._merge_agreeing(claims, reconciliation),
+                    "design_decisions": [],
                     "interfaces": {"inputs": [], "outputs": [], "invariants": []},
-                    "provenance_refs": refs,
+                    "provenance_refs": sorted({c.claim_id for c in claims}),
                 }
             )
+
+        # Unrecognized numeric facts that cluster within one section of one
+        # paper. Section 10.1: these describe a procedure and are not
+        # independent settings; presenting them flat is what made a coding
+        # agent read a study's funnel (1295 households -> 913 treated -> 501
+        # final) as a contradiction. They are emitted under a component named
+        # for their section, with each value scoped to it.
+        for scope_key, claims in sorted(_group_by_scope(scoped).items()):
+            section = claims[0].provenance.section or scope_key
+            entries = []
+            for claim in sorted(claims, key=lambda c: c.claim_id):
+                entry = self._hyperparameter_entry(claim, reconciliation)
+                entry["condition"] = entry.get("condition") or f"reported in section {section!r}"
+                entries.append(entry)
+            components.append(
+                {
+                    "component_id": ids.component_id(f"reported {section}")[:40],
+                    "name": section,
+                    "role": (
+                        f"Quantities reported in the paper section {section!r}. These "
+                        "describe one context - a study design, an experiment - and are "
+                        "not necessarily independent values to configure."
+                    ),
+                    "depends_on": [],
+                    "hyperparameters": entries,
+                    "design_decisions": [],
+                    "interfaces": {"inputs": [], "outputs": [], "invariants": []},
+                    "provenance_refs": sorted(c.claim_id for c in claims),
+                }
+            )
+
+        # Design decisions, grouped by the component they concern (section
+        # 7.4). 27 of these were extracted and verified in the M8 run and none
+        # reached the spec - this line is why.
+        self._attach_design_decisions(components)
         return components
+
+    def _attach_design_decisions(self, components: list[dict[str, Any]]) -> None:
+        by_target: dict[str, list[Claim]] = defaultdict(list)
+        for claim in self.claims.values():
+            if claim.status != "verified" or claim.type != "method":
+                continue
+            if claim.payload.get("attribution", "own") != "own":
+                continue
+            by_target[str(claim.payload.get("applies_to") or "global")].append(claim)
+
+        index = {c["component_id"]: c for c in components}
+        for target, claims in sorted(by_target.items()):
+            cid = "cmp_global" if target == "global" else ids.component_id(target)
+            entries = [
+                {
+                    "sub_problem": c.payload["sub_problem"],
+                    "approach": c.payload["approach"],
+                    "adopted": bool(c.payload.get("adopted", True)),
+                    "rationale": c.payload.get("rationale"),
+                    "alternatives_rejected": list(c.payload.get("alternatives_rejected") or []),
+                    "provenance_refs": [c.claim_id],
+                }
+                for c in sorted(claims, key=lambda c: c.claim_id)
+            ]
+            if cid in index:
+                index[cid]["design_decisions"] = entries
+                index[cid]["provenance_refs"] = sorted(
+                    {*index[cid]["provenance_refs"], *(c.claim_id for c in claims)}
+                )
+            else:
+                components.append(
+                    {
+                        "component_id": cid,
+                        "name": "Global configuration" if target == "global" else target,
+                        "role": (
+                            "Design decisions applying across the implementation."
+                            if target == "global"
+                            else f"Design decisions for {target}."
+                        ),
+                        "depends_on": [],
+                        "hyperparameters": [],
+                        "design_decisions": entries,
+                        "interfaces": {"inputs": [], "outputs": [], "invariants": []},
+                        "provenance_refs": sorted(c.claim_id for c in claims),
+                    }
+                )
 
     def _merge_agreeing(
         self, claims: list[Claim], reconciliation: ReconciliationResult | None
@@ -555,3 +674,20 @@ def _value_key(value: Any) -> str:
     if isinstance(value, int | float):
         return f"{float(value):.12g}"
     return str(value).strip().lower()
+
+
+def _partition_by_recognition(claims: list[Claim]) -> tuple[list[Claim], list[Claim]]:
+    """Split into (recognized training settings, unrecognized quantities)."""
+    recognized: list[Claim] = []
+    other: list[Claim] = []
+    for claim in claims:
+        name = str(claim.payload.get("canonical_name") or "")
+        (recognized if name in _KNOWN_SETTINGS else other).append(claim)
+    return recognized, other
+
+
+def _group_by_scope(claims: list[Claim]) -> dict[str, list[Claim]]:
+    grouped: dict[str, list[Claim]] = defaultdict(list)
+    for claim in claims:
+        grouped[claim.scope_id or claim.paper_id].append(claim)
+    return grouped

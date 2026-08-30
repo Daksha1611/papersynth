@@ -71,6 +71,10 @@ class RunResult:
     #: Papers the caller asked for, which exceeds len(documents) when one
     #: could not be fetched or parsed.
     papers_requested: int = 0
+    #: paper_id -> {extractor: (sections_read, sections_total, batches_ok,
+    #: batches_total)}. A thorough run and a 1%-read run must not look
+    #: identical in the output (M8 item 4).
+    coverage: dict[str, dict[str, tuple[int, int, int, int]]] = field(default_factory=dict)
 
     @property
     def open_conflicts(self) -> list[dict[str, Any]]:
@@ -219,6 +223,7 @@ class Pipeline:
             self.workspace.write_yaml("06_gaps.yaml", [g.model_dump() for g in result.gaps])
 
         self._synthesize(result, objective=objective, reviewer=reviewer)
+        self._write_coverage(result)
         result.warnings.extend(alignment.notes)
         return result
 
@@ -267,6 +272,7 @@ class Pipeline:
                 continue
 
             result.warnings.extend(extraction.warnings)
+            result.coverage[doc.paper_id] = extraction.coverage
             claim_set = ClaimSet(paper_id=doc.paper_id, claims=extraction.claims)
             if self.workspace:
                 self.workspace.write_yaml(
@@ -346,6 +352,7 @@ class Pipeline:
                 return
 
             warnings.extend(extraction.warnings)
+            result.coverage[doc.paper_id] = extraction.coverage
             claim_set = ClaimSet(paper_id=doc.paper_id, claims=extraction.claims)
             if self.workspace:
                 self.workspace.write_yaml(
@@ -485,6 +492,7 @@ class Pipeline:
             reconciliation=result.reconciliation,
             gaps=result.gaps,
             blocking=report.blocking_conflicts,
+            coverage=result.coverage,
         )
         if self.workspace:
             self.workspace.write_text("SPEC_REVIEW.md", review)
@@ -538,6 +546,24 @@ class Pipeline:
                 "config": self.settings.reproducibility_fingerprint(),
             },
         )
+        # Coverage is written after the run completes; see _write_coverage.
+
+    def _write_coverage(self, result: RunResult) -> None:
+        if not self.workspace or not result.coverage:
+            return
+        rows = {}
+        for paper_id, per_ex in result.coverage.items():
+            rows[paper_id] = {
+                ex: {
+                    "sections_read": r,
+                    "sections_total": t,
+                    "section_coverage": round(r / t, 3) if t else None,
+                    "batches_ok": bo,
+                    "batches_total": bt,
+                }
+                for ex, (r, t, bo, bt) in per_ex.items()
+            }
+        self.workspace.write_yaml("coverage.yaml", rows)
 
 
 def _primary_sources(graph: Any, documents: list[StructuredDocument]) -> dict[str, str]:
