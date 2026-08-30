@@ -63,6 +63,7 @@ Pre-alpha, under active construction. Building the minimal viable architecture f
 - [x] SplitterAgent (opt-in; see below)
 - [x] `method` claim type + METHOD_CONFLICT detection
 - [x] Adversarial gap pass (`--adversarial-gaps`)
+- [x] `result` claim type + RESULT_CONFLICT detection + `expected_results`
 - [x] Symbol closure check
 
 **The MVA acceptance criterion now passes.** Given three papers with one hand-planted conflicting hyperparameter, the pipeline emits a spec that (a) contains that conflict in `open_conflicts` with both positions and full provenance, and (b) contains no fabricated conflicts — the two values stated under *different* conditions are correctly left alone.

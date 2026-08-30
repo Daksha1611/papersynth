@@ -204,3 +204,45 @@ whether it may be promoted to `verified`. Below the threshold it stays
 `extracted`: not rejected, because the checks passed and it may well be right,
 but excluded from alignment and from auto-resolution, because a claim its own
 re-extractions disagreed on should not settle a conflict.
+
+
+---
+
+## §10.3 — Detector registration
+
+**Was:** detectors self-register and are run over every multi-paper cluster.
+
+**Observed:** nothing constrained a detector to the claim type it understands.
+ValueConflictDetector was written when hyperparameters were the only type
+carrying a `value`, so adding `result` silently activated it on benchmark
+scores. It groups by condition and unit, neither of which a result payload has,
+so every score landed in one group regardless of dataset, split or model
+variant - and a dev score was reported as contradicting a test score. That is
+exactly the ER-06 violation RESULT_CONFLICT exists to prevent, arriving through
+a different detector.
+
+**Amendment.** A detector declares the claim type it scans and the scan loop
+enforces it. The failure was not that the value detector was wrong; it was that
+nothing said what it was for, so a later claim type could quietly enter its
+scope. Adding the declaration makes the next claim type safe by default rather
+than by whoever remembers.
+
+---
+
+## §7.6 — RESULT_CONFLICT severity
+
+**Amendment.** Result conflicts are always MATERIAL, never BLOCKING.
+
+The severity ladder defines BLOCKING as "cannot write correct code without
+resolving". A disagreement about a reported score never meets that: an
+implementer can write the code either way. What they cannot do is tell whether
+the finished code is right, because the reproduction target is in dispute.
+That is a validation problem rather than an implementation decision, so it
+rides along in `open_conflicts` where the implementer sees both numbers and
+picks a target.
+
+One refinement the design does not mention but the payload makes possible: two
+results whose reported variances overlap are not treated as conflicting.
+Agreement within stated uncertainty is agreement, and reporting it would ask a
+reviewer to adjudicate noise. Where no paper states a variance, a difference is
+reported, because there is then no basis for calling it noise.

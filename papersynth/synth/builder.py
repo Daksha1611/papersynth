@@ -96,6 +96,7 @@ class SpecBuilder:
             ],
             "objective": self.objective,
             "components": self._components(disputed, superseded, reconciliation),
+            "expected_results": self._expected_results(disputed, superseded),
             "open_conflicts": self._open_conflicts(contradictions, reconciliation),
             "resolved_conflicts": _resolved_conflicts(reconciliation),
             "missing_but_critical": [_gap_entry(g) for g in gaps],
@@ -284,6 +285,58 @@ class SpecBuilder:
         return entry
 
     # -- conflicts ---------------------------------------------------------
+
+    def _expected_results(
+        self, disputed: set[tuple[str, str]], superseded: set[str]
+    ) -> list[dict[str, Any]]:
+        """Reproduction targets: what the finished code should produce.
+
+        A disputed result is withheld exactly as a disputed hyperparameter is.
+        Emitting one of two contested scores as the target would tell an
+        implementer their reimplementation is wrong when it is merely matching
+        the other paper.
+
+        Tolerance comes from the paper's own reported variance and is left null
+        otherwise. Inventing one would be inventing a claim about how
+        reproducible the result is, which is precisely what nobody stated.
+        """
+        grouped: dict[tuple[str, str, str, str], list[Claim]] = defaultdict(list)
+        for claim in self.claims.values():
+            if claim.status != "verified" or claim.type != "result":
+                continue
+            if claim.claim_id in superseded:
+                continue
+            payload = claim.payload
+            scope = (
+                str(payload.get("metric") or ""),
+                str(payload.get("dataset") or ""),
+                str(payload.get("split") or ""),
+                str(payload.get("model_variant") or ""),
+            )
+            if (scope[0], normalize_condition(scope[2])) in disputed:
+                continue
+            grouped[scope].append(claim)
+
+        out = []
+        for scope, claims in sorted(grouped.items()):
+            members = sorted(claims, key=lambda c: c.claim_id)
+            values = {_value_key(c.payload.get("value")) for c in members}
+            if len(values) > 1:
+                # The corpus disagrees and no resolution closed it, so there is
+                # no single target to report.
+                continue
+            first = members[0]
+            out.append(
+                {
+                    "metric": scope[0],
+                    "value": first.payload.get("value"),
+                    "tolerance": first.payload.get("reported_variance"),
+                    "dataset": scope[1] or None,
+                    "split": scope[2] or None,
+                    "provenance_refs": [c.claim_id for c in members],
+                }
+            )
+        return out
 
     def _open_conflicts(
         self,

@@ -57,11 +57,15 @@ _PEER_REVIEWED = frozenset(
 
 class ValueConflictDetector:
     conflict_type = "VALUE_CONFLICT"
+    claim_type = "hyperparameter"
     auto_resolvable = True
     version = DETECTOR_VERSION
 
     def scan(self, cluster: ConceptCluster, graph: ConceptGraph) -> list[Contradiction]:
-        if not cluster.is_multi_paper:
+        # Hyperparameters only. A benchmark score also has a `value`, but
+        # comparing scores needs dataset, split and variant held constant
+        # (ER-06), which this detector knows nothing about.
+        if cluster.concept_type != "hyperparameter" or not cluster.is_multi_paper:
             return []
 
         claims = [c for c in graph.claims_in(cluster) if c.status == "verified"]

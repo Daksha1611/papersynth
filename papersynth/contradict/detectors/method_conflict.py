@@ -59,6 +59,7 @@ STRUCTURAL_SUB_PROBLEMS = frozenset(
 
 class MethodConflictDetector:
     conflict_type = "METHOD_CONFLICT"
+    claim_type = "method"
     #: Section 10.3: the policy honours this and never auto-resolves these,
     #: whatever rule might otherwise match.
     auto_resolvable = False

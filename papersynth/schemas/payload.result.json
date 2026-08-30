@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/payload.result.json",
+  "title": "result payload",
+  "description": "A reported measurement. Every field that scopes the measurement is part of its identity, because ER-06 forbids comparing results obtained under different conditions.",
+  "type": "object",
+  "properties": {
+    "metric": {
+      "type": "string",
+      "minLength": 1,
+      "description": "e.g. BLEU, accuracy, F1, perplexity."
+    },
+    "value": { "type": "number" },
+    "dataset": {
+      "type": ["string", "null"],
+      "description": "The benchmark. Two numbers from different datasets are not comparable at all."
+    },
+    "split": {
+      "type": ["string", "null"],
+      "description": "e.g. newstest2014, dev, test. Dev and test scores differ routinely and are not in conflict."
+    },
+    "model_variant": {
+      "type": ["string", "null"],
+      "description": "e.g. base, large. A base model scoring lower than a large one is expected, not contradictory."
+    },
+    "conditions": {
+      "type": "object",
+      "description": "Protocol details the paper states: beam size, length penalty, number of runs.",
+      "additionalProperties": true
+    },
+    "reported_variance": {
+      "type": ["number", "null"],
+      "description": "Standard deviation or half-interval where the paper gives one. Two results whose intervals overlap are not contradictory."
+    },
+    "stated_explicitly": { "type": "boolean" }
+  },
+  "required": ["metric", "value", "stated_explicitly"],
+  "additionalProperties": false
+}

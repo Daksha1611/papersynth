@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from papersynth.contradict.detectors.method_conflict import MethodConflictDetector
+from papersynth.contradict.detectors.result_conflict import ResultConflictDetector
 from papersynth.contradict.detectors.value_conflict import (
     ValueConflictDetector,
     attach_paper_support,
@@ -22,6 +23,7 @@ __all__ = [
     "ContradictionScan",
     "Detector",
     "MethodConflictDetector",
+    "ResultConflictDetector",
     "ValueConflictDetector",
     "attach_paper_support",
     "detect",
@@ -35,6 +37,14 @@ __all__ = [
 @runtime_checkable
 class Detector(Protocol):
     conflict_type: str
+    #: Which claim type this detector understands. Declared rather than
+    #: assumed: ValueConflictDetector was written when hyperparameters were
+    #: the only claim type carrying a value, and adding `result` silently
+    #: activated it on benchmark scores - which it grouped by condition and
+    #: unit, neither of which a result has, so every score landed in one group
+    #: regardless of dataset or split. That is precisely the ER-06 violation
+    #: RESULT_CONFLICT exists to prevent, produced by the wrong detector.
+    claim_type: str
     #: Honoured by the reconciliation policy; a detector may forbid its own
     #: conflicts from ever being auto-resolved (section 10.3).
     auto_resolvable: bool
@@ -53,6 +63,7 @@ def register_detector(cls: type[Detector]) -> type[Detector]:
 
 register_detector(ValueConflictDetector)
 register_detector(MethodConflictDetector)
+register_detector(ResultConflictDetector)
 
 
 class ContradictionScan:
@@ -67,6 +78,8 @@ class ContradictionScan:
             if not cluster.is_multi_paper:
                 continue
             for detector in self.detectors:
+                if getattr(detector, "claim_type", cluster.concept_type) != cluster.concept_type:
+                    continue
                 found.extend(detector.scan(cluster, graph))
 
         # Deterministic order: severity first so the review list leads with what

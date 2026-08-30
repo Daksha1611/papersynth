@@ -816,3 +816,92 @@ class TestR013BlockingResolutionInvisibleToDiff:
         payload = diff_specs(self.BEFORE, self.after()).to_dict()
         json.dumps(payload)
         assert payload["resolutions"]["added"][0]["contradiction_id"] == "ctr_0001"
+
+
+class TestR014DetectorRanOnTheWrongClaimType:
+    """Adding the `result` claim type silently activated ValueConflictDetector
+    on benchmark scores.
+
+    That detector was written when hyperparameters were the only claim type
+    carrying a `value`, and it never checked concept_type. It groups by
+    condition and unit - neither of which a result payload has - so every score
+    landed in one group regardless of dataset, split or model variant, and a
+    dev score was reported as contradicting a test score. Precisely the ER-06
+    violation RESULT_CONFLICT exists to prevent, produced by a different
+    detector entirely.
+
+    Every detector now declares the claim type it understands, so the next
+    claim type added cannot repeat this."""
+
+    def result_claim(self, paper, value, split):
+        from papersynth.core import ids
+        from papersynth.core.models import Claim, Provenance
+
+        claim = Claim.build(
+            paper_id=paper,
+            claim_type="result",
+            provenance=Provenance(
+                paper_id=paper,
+                span_id=f"{paper}#s1.p0.0",
+                section="Results",
+                page=5,
+                char_start=0,
+                char_end=40,
+                quote_hash=ids.quote_hash(str(value)),
+                extraction_method="llm",
+                extractor_version="result@1.0.0",
+                confidence=0.9,
+            ),
+            payload={
+                "metric": "bleu",
+                "value": value,
+                "dataset": "WMT14 EN-DE",
+                "split": split,
+                "model_variant": "base",
+                "conditions": {},
+                "reported_variance": None,
+                "stated_explicitly": True,
+            },
+        )
+        claim.status = "verified"
+        return claim
+
+    def scan(self, *claims):
+        from papersynth.align import Aligner
+        from papersynth.contradict import ContradictionScan
+        from papersynth.core.models import ClaimSet
+
+        graph, _ = Aligner().align([ClaimSet(paper_id=c.paper_id, claims=[c]) for c in claims])
+        return ContradictionScan().run(graph)
+
+    def test_a_dev_score_does_not_contradict_a_test_score(self):
+        assert (
+            self.scan(
+                self.result_claim("p1", 27.3, "dev"),
+                self.result_claim("p2", 24.1, "test"),
+            )
+            == []
+        )
+
+    def test_only_the_result_detector_reports_on_results(self):
+        found = self.scan(
+            self.result_claim("p1", 27.3, "test"),
+            self.result_claim("p2", 28.4, "test"),
+        )
+        assert [c.type for c in found] == ["RESULT_CONFLICT"]
+
+    def test_every_detector_declares_its_claim_type(self):
+        from papersynth.contradict import DETECTORS
+
+        for conflict_type, detector in DETECTORS.items():
+            assert getattr(detector, "claim_type", None), (
+                f"{conflict_type} does not declare which claim type it scans"
+            )
+
+    def test_declared_types_are_distinct_per_detector(self):
+        """Two detectors on one claim type would each need to know about the
+        other's grouping rules."""
+        from papersynth.contradict import DETECTORS
+
+        types = [d.claim_type for d in DETECTORS.values()]
+        assert len(types) == len(set(types))
