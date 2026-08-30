@@ -78,8 +78,14 @@ def trace(
     doc: StructuredDocument,
     *,
     provider: LLMProvider | None = None,
+    entailment: CheckOutcome | None = None,
 ) -> TraceResult:
-    """Run the trace. Entailment is skipped when no provider is supplied."""
+    """Run the trace.
+
+    An `entailment` verdict may be supplied by a caller that judged claims in
+    batches; otherwise a provider is asked for one, and with neither the check
+    is skipped.
+    """
     span = doc.resolve_span(claim.provenance.span_id, char_end=claim.provenance.char_end)
 
     if span is None:
@@ -106,9 +112,12 @@ def trace(
 
     numeric = check_numeric_literal(claim, span.text)
 
-    entailment = CheckOutcome("n/a", "no provider supplied")
-    if provider is not None:
-        entailment = check_entailment(claim, span.text, provider)
+    if entailment is None:
+        entailment = (
+            check_entailment(claim, span.text, provider)
+            if provider is not None
+            else CheckOutcome("n/a", "no provider supplied")
+        )
 
     return TraceResult(CheckOutcome("pass"), hash_check, numeric, entailment)
 
@@ -226,3 +235,98 @@ def _close(a: float, b: float) -> bool:
     if scale == 0:
         return True
     return abs(a - b) / scale < 1e-6
+
+
+def check_entailment_batch(
+    pairs: list[tuple[Claim, str]], provider: LLMProvider
+) -> dict[str, CheckOutcome]:
+    """Judge several claims in one call, keyed by claim id.
+
+    One call per claim is the largest single source of calls in a run - the
+    entailment check runs on every extracted claim, where extraction itself
+    runs once per section batch. Section 6.4.5 puts batching ahead of the
+    fallback chain for exactly this reason: the cheapest call is the one never
+    made, and on a free tier capped per minute the difference decides whether a
+    run finishes.
+
+    Batching does cost something real: the judge sees several claims at once
+    and could let a confident verdict on one colour another. That is why each
+    passage is given with its own claim and asked about separately within the
+    call, and why an answer that omits a claim fails closed rather than
+    defaulting to entailed.
+    """
+    if not pairs:
+        return {}
+    if len(pairs) == 1:
+        claim, span_text = pairs[0]
+        return {claim.claim_id: check_entailment(claim, span_text, provider)}
+
+    rendered = "\n\n".join(
+        f"--- CLAIM {claim.claim_id} ---\nPASSAGE:\n{span_text}\n\nCLAIM:\n{_render_claim(claim)}"
+        for claim, span_text in pairs
+    )
+    prompt = (
+        "Judge each claim below against its own passage, independently. A "
+        "verdict on one claim tells you nothing about another.\n\n"
+        f"{rendered}\n\n"
+        "For each, look for reasons the passage does NOT support the claim: a "
+        "different value, a different scope or condition, a different quantity "
+        "with a similar name, or a claim going beyond what the passage says.\n"
+        'Answer JSON: {"verdicts": [{"claim_id": "...", "entailed": true|false, '
+        '"reason": "<one sentence>"}]}'
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "claim_id": {"type": "string"},
+                        "entailed": {"type": "boolean"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["claim_id", "entailed"],
+                },
+            }
+        },
+        "required": ["verdicts"],
+    }
+
+    kwargs: dict[str, Any] = {"schema": schema, "temperature": 0.0, "system": TRACER_SYSTEM}
+    if hasattr(provider, "chain"):
+        kwargs |= {
+            "stage": "verify",
+            "paper_id": pairs[0][0].paper_id,
+            "extractor": "tracer@1.0.0",
+            "template_id": "tracer_batch@1.0.0",
+        }
+
+    completion = provider.complete(prompt, **kwargs)
+    payload = completion.parsed if isinstance(completion.parsed, dict) else {}
+
+    verdicts = {
+        str(v.get("claim_id")): v
+        for v in payload.get("verdicts") or []
+        if isinstance(v, dict) and v.get("claim_id")
+    }
+
+    out: dict[str, CheckOutcome] = {}
+    for claim, _ in pairs:
+        verdict = verdicts.get(claim.claim_id)
+        if verdict is None or "entailed" not in verdict:
+            # A claim the judge did not answer for is not a claim it approved.
+            # Defaulting to entailed would let a truncated response silently
+            # verify everything it ran out of room to consider.
+            out[claim.claim_id] = CheckOutcome(
+                "fail", "tracer returned no verdict for this claim; treated as unsupported"
+            )
+        elif verdict.get("entailed") is True:
+            out[claim.claim_id] = CheckOutcome("pass")
+        else:
+            out[claim.claim_id] = CheckOutcome(
+                "fail",
+                str(verdict.get("reason", "")).strip() or "tracer found the span unsupportive",
+            )
+    return out

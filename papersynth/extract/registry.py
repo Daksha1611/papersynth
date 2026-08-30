@@ -56,6 +56,7 @@ def build(
     provider: LLMProvider,
     *,
     temperature: float = 0.0,
+    self_consistency_n: int = 1,
 ) -> list[LLMExtractor]:
     """Instantiate the named extractors, rejecting unknown names loudly."""
     _ensure_builtins()
@@ -66,7 +67,10 @@ def build(
         raise PaperSynthError(
             f"Unknown extractor(s): {', '.join(unknown)}. Available: {', '.join(available())}"
         )
-    return [EXTRACTORS[name](provider, temperature=temperature) for name in names]
+    return [
+        EXTRACTORS[name](provider, temperature=temperature, self_consistency_n=self_consistency_n)
+        for name in names
+    ]
 
 
 def run_all(

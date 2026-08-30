@@ -78,7 +78,13 @@ class Settings(BaseSettings):
     cache_dir: Path = Path("./.papersynth_cache")
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     align_threshold: float = Field(default=0.82, ge=0.0, le=1.0)
-    max_parallel_papers: int = Field(default=3, ge=1, le=32)
+    #: Papers extracted concurrently. One by default, and that is not
+    #: timidity: the binding constraint on a hosted free tier is tokens per
+    #: minute, not latency. Groq allows 8,000 and one extraction prompt is
+    #: roughly 3,000, so three concurrent papers put 9,000 in flight and
+    #: guarantee the 429 that concurrency was supposed to avoid waiting for.
+    #: Raise it on the local vLLM path, which has no per-minute cap.
+    max_parallel_papers: int = Field(default=1, ge=1, le=32)
     policy: Path = Path("config/reconcile_policy.yaml")
     range_rules: Path = Path("config/range_rules.yaml")
     checklist: Path = Path("config/implementability_checklist.yaml")

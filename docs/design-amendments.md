@@ -156,3 +156,51 @@ an instruction that fails when followed is worse than a missing feature.
 Resumption is per paper rather than per stage: an interrupted run has some
 papers fully extracted and others untouched, and extraction is where the calls
 go.
+
+
+---
+
+## §4.2 — Per-paper parallelism
+
+**Was:** stages 0-2 run per paper and are parallelizable, with
+`max_parallel_papers` defaulting to 3 to meet the fifteen-minute target in
+NFR-03.
+
+**Observed:** the design assumed latency was the binding constraint. On a
+hosted free tier it is tokens per minute. Groq allows 8,000 and one extraction
+prompt is roughly 3,000, so three concurrent papers put 9,000 in flight and
+guarantee the rate limit that concurrency was meant to avoid waiting for.
+Concurrency does not raise the ceiling; it reaches it faster.
+
+**Amendment.** Parallelism is implemented and defaults to 1. It pays on the
+local vLLM path, which has no per-minute cap, and the setting says so.
+
+Results are merged by input position rather than completion order. Merging as
+papers finish would make the claim set - and therefore cluster IDs,
+contradiction IDs and the emitted spec - depend on which paper happened to
+return first, and identical inputs would stop producing identical specs
+(NFR-02). A test asserts a three-way parallel run and a sequential run emit
+byte-identical specs.
+
+---
+
+## §8.3.4 — Self-consistency
+
+**Amendment, on how the re-extractions differ.** The design says "different
+prompt orderings" without saying why, and the reason turns out to be load
+bearing. Extraction runs at temperature 0 and responses are cached by prompt
+hash, so re-issuing an identical prompt returns the identical answer - free,
+instant, and worth nothing as a second opinion. The variation has to come from
+the prompt itself, so passes rotate the section order.
+
+Agreement is scored on what counts as the same fact, not on `claim_id`. The
+identifier folds in the span, and a model quoting a different sentence for the
+same value on a second pass still reported the same fact; scoring that as
+disagreement would penalise exactly the claims that were found twice.
+
+A claim that disagrees is not dropped. It is reported with its agreement
+recorded and its confidence scaled, and the confidence threshold then decides
+whether it may be promoted to `verified`. Below the threshold it stays
+`extracted`: not rejected, because the checks passed and it may well be right,
+but excluded from alignment and from auto-resolution, because a claim its own
+re-extractions disagreed on should not settle a conflict.

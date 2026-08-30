@@ -18,7 +18,12 @@ from papersynth.core.config import Settings, get_settings
 from papersynth.core.document import StructuredDocument
 from papersynth.core.models import Claim, ClaimSet
 from papersynth.llm.base import LLMProvider
-from papersynth.verify.citation_trace import TraceResult, check_numeric_literal, trace
+from papersynth.verify.citation_trace import (
+    TraceResult,
+    check_entailment_batch,
+    check_numeric_literal,
+    trace,
+)
 from papersynth.verify.range_check import CheckOutcome, RangeRules
 from papersynth.verify.symbol_check import symbol_check
 
@@ -43,6 +48,9 @@ class VerificationReport:
     verified: int = 0
     rejected: int = 0
     warned: int = 0
+    #: Passed every check but did not clear the confidence threshold, usually
+    #: because re-extractions disagreed. Neither verified nor rejected.
+    low_confidence: int = 0
     rejection_reasons: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -78,20 +86,57 @@ class Verifier:
         self, claims: ClaimSet, doc: StructuredDocument
     ) -> tuple[ClaimSet, VerificationReport]:
         report = VerificationReport(paper_id=claims.paper_id, total=len(claims.claims))
-        verified: list[Claim] = []
 
-        for claim in claims.claims:
-            verified.append(self._verify_one(claim, doc, report))
+        # Entailment is judged in batches before the per-claim checks, so the
+        # expensive part costs ceil(n / batch_size) calls rather than n. The
+        # cheap deterministic checks then run per claim as before.
+        entailments = self._batch_entailments(claims.claims, doc)
+
+        verified = [
+            self._verify_one(claim, doc, report, entailments.get(claim.claim_id))
+            for claim in claims.claims
+        ]
 
         return (
             ClaimSet(paper_id=claims.paper_id, claims=verified, warnings=claims.warnings),
             report,
         )
 
+    def _batch_entailments(
+        self, claims: list[Claim], doc: StructuredDocument
+    ) -> dict[str, CheckOutcome]:
+        """Judge every claim whose span resolves, in batches.
+
+        A claim whose span does not resolve is skipped rather than batched: it
+        fails citation_trace on the deterministic check anyway, and spending
+        judge tokens on text that could not be located would be paying to
+        confirm something already known.
+        """
+        if not self.entailment or self.provider is None:
+            return {}
+
+        pairs = []
+        for claim in claims:
+            span = doc.resolve_span(claim.provenance.span_id, char_end=claim.provenance.char_end)
+            if span is not None:
+                pairs.append((claim, span.text))
+
+        outcomes: dict[str, CheckOutcome] = {}
+        size = max(1, self.settings.verify_batch_size)
+        for start in range(0, len(pairs), size):
+            outcomes |= check_entailment_batch(pairs[start : start + size], self.provider)
+        return outcomes
+
     def _verify_one(
-        self, claim: Claim, doc: StructuredDocument, report: VerificationReport
+        self,
+        claim: Claim,
+        doc: StructuredDocument,
+        report: VerificationReport,
+        entailment: CheckOutcome | None = None,
     ) -> Claim:
-        trace_result = trace(claim, doc, provider=self.provider if self.entailment else None)
+        # The entailment verdict comes from the batch when one ran, so trace()
+        # is asked only for the deterministic checks.
+        trace_result = trace(claim, doc, provider=None, entailment=entailment)
         range_result = self.range_rules.check(claim)
         symbol_result = symbol_check(claim)
 
@@ -121,6 +166,22 @@ class Verifier:
         if symbol_result.failed:
             claim.status = "rejected"
             report.record_rejection("symbol_check", symbol_result.reason)
+            return claim
+
+        if claim.confidence < self.settings.confidence_threshold:
+            # Not rejected: the checks passed and the claim may well be right.
+            # It simply did not survive its own re-extractions consistently
+            # enough to drive an automatic decision, so it stays `extracted`
+            # and is excluded from alignment and from auto-resolution
+            # (section 8.3.4). Rejecting it would discard a plausible claim;
+            # promoting it would let a coin-flip settle a conflict.
+            claim.status = "extracted"
+            claim.verification.notes.append(
+                f"confidence {claim.confidence} is below the "
+                f"{self.settings.confidence_threshold} threshold; "
+                "not promoted to verified"
+            )
+            report.low_confidence += 1
             return claim
 
         if trace_result.numeric_literal.result == "warn":

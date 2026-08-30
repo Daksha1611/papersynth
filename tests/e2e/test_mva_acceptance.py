@@ -145,6 +145,14 @@ def scripted_provider() -> StubProvider:
                 ],
                 "reason": "one quantity, values genuinely disagree",
             }
+        if "Judge each claim below" in prompt:
+            # Batched entailment: every claim in the batch is supported.
+            return {
+                "verdicts": [
+                    {"claim_id": cid, "entailed": True, "reason": "stated directly"}
+                    for cid in re.findall(r"--- CLAIM (clm_[0-9a-f]{6}) ---", prompt)
+                ]
+            }
         if "Does the passage state" in prompt:
             return ENTAILED
         for paper_id, items in EXTRACTIONS.items():

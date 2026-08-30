@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from papersynth.align.embed import Embedder, HashEmbedder, cosine
+from papersynth.align.embed import Embedder, build_embedder, cosine
 from papersynth.align.splitter import SplitterAgent
 from papersynth.core import ids
 from papersynth.core.models import (
@@ -86,12 +86,16 @@ class Aligner:
         self,
         *,
         embedder: Embedder | None = None,
+        embedding_model: str | None = None,
         threshold: float = 0.82,
         embedding_merges: bool | None = None,
         splitter: SplitterAgent | None = None,
         provider: LLMProvider | None = None,
     ) -> None:
-        self.embedder = embedder or HashEmbedder()
+        # build_embedder falls back to hashing when the configured model is
+        # not installed, so a missing sentence-transformers degrades alignment
+        # quality rather than failing the run.
+        self.embedder = embedder or build_embedder(embedding_model)
         self.threshold = threshold
         self.splitter = splitter or (SplitterAgent(provider) if provider else None)
         #: Off by default even with the gate present. Measured on

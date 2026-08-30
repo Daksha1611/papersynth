@@ -193,6 +193,7 @@ class Pipeline:
 
         graph, alignment = Aligner(
             threshold=self.settings.align_threshold,
+            embedding_model=self.settings.embedding_model if self.embedding_merges else None,
             provider=self.provider if self.split_gate else None,
             embedding_merges=self.embedding_merges,
         ).align(verified_sets)
@@ -225,7 +226,10 @@ class Pipeline:
 
     def _per_paper(self, documents: list[StructuredDocument], result: RunResult) -> list[ClaimSet]:
         extractors = registry.build(
-            self.extractors, self.provider, temperature=self.settings.temperature
+            self.extractors,
+            self.provider,
+            temperature=self.settings.temperature,
+            self_consistency_n=self.settings.self_consistency_n,
         )
         rules = RangeRules.load(self.settings.range_rules)
         verifier = Verifier(
@@ -234,6 +238,10 @@ class Pipeline:
             settings=self.settings,
             entailment=self.entailment,
         )
+
+        workers = min(self.settings.max_parallel_papers, len(documents))
+        if workers > 1:
+            return self._per_paper_parallel(documents, result, extractors, verifier, workers)
 
         verified_sets: list[ClaimSet] = []
         for doc in documents:
@@ -280,6 +288,91 @@ class Pipeline:
             # listing fifty-two contributed - two contradictory counts in the
             # deliverable, from the artifact that was missing rather than from
             # any disagreement in the data.
+            self.workspace.write_json(
+                "02_verified/verification_report.json",
+                [asdict(r) for r in result.reports],
+            )
+        return verified_sets
+
+    def _per_paper_parallel(
+        self,
+        documents: list[StructuredDocument],
+        result: RunResult,
+        extractors: list[Any],
+        verifier: Verifier,
+        workers: int,
+    ) -> list[ClaimSet]:
+        """Extract and verify several papers at once.
+
+        Results are collected by input position and merged in that order, not
+        in completion order. Otherwise the claim set - and therefore cluster
+        IDs, contradiction IDs and the emitted spec - would depend on which
+        paper happened to finish first, and identical inputs would stop
+        producing identical specs (NFR-02).
+
+        Worth stating what this does not buy on a hosted free tier: the limit
+        there is tokens per minute, and concurrency reaches that ceiling
+        faster rather than raising it. It pays on a local endpoint.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        outcomes: dict[int, tuple[ClaimSet | None, VerificationReport | None, list[str]]] = {}
+
+        def work(index: int, doc: StructuredDocument) -> None:
+            warnings: list[str] = []
+            done = self._resume_paper(doc)
+            if done is not None:
+                warnings.append(f"{doc.paper_id}: reused verified claims from disk")
+                outcomes[index] = (
+                    done,
+                    VerificationReport(
+                        paper_id=doc.paper_id,
+                        total=len(done.claims),
+                        verified=len(done.verified),
+                        rejected=len(done.rejected),
+                    ),
+                    warnings,
+                )
+                return
+
+            try:
+                extraction = registry.run_all(doc, extractors)
+            except PaperSynthError as exc:
+                outcomes[index] = (
+                    None,
+                    None,
+                    [f"{doc.paper_id}: extraction failed ({exc}); skipped"],
+                )
+                return
+
+            warnings.extend(extraction.warnings)
+            claim_set = ClaimSet(paper_id=doc.paper_id, claims=extraction.claims)
+            if self.workspace:
+                self.workspace.write_yaml(
+                    f"01_claims/{_safe(doc.paper_id)}.yaml", claim_set.model_dump()
+                )
+
+            verified, report = verifier.verify(claim_set, doc)
+            if self.workspace:
+                self.workspace.write_yaml(
+                    f"02_verified/{_safe(doc.paper_id)}.yaml", verified.model_dump()
+                )
+            outcomes[index] = (verified, report, warnings)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(lambda pair: work(*pair), enumerate(documents)))
+
+        verified_sets: list[ClaimSet] = []
+        for index in range(len(documents)):
+            claim_set, report, warnings = outcomes.get(index, (None, None, []))
+            result.warnings.extend(warnings)
+            if claim_set is None:
+                continue
+            if report is not None:
+                result.reports.append(report)
+            verified_sets.append(claim_set)
+
+        if self.workspace:
             self.workspace.write_json(
                 "02_verified/verification_report.json",
                 [asdict(r) for r in result.reports],
