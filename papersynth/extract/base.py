@@ -95,9 +95,19 @@ class LLMExtractor(ABC):
     section_pattern: ClassVar[str] = ""
     system_prompt: ClassVar[str] = ""
 
-    def __init__(self, provider: LLMProvider, *, temperature: float = 0.0) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        temperature: float = 0.0,
+        self_consistency_n: int = 1,
+    ) -> None:
         self.provider = provider
         self.temperature = temperature
+        #: Re-extractions used to score agreement (section 8.3.4). One means
+        #: the check is off, which is the default: it multiplies extraction
+        #: cost by n, and section 6.4.5 reserves it for final reviewed runs.
+        self.self_consistency_n = max(1, self_consistency_n)
 
     # -- subclass hooks ----------------------------------------------------
 
@@ -161,10 +171,31 @@ class LLMExtractor(ABC):
             result.warnings.append(f"{self.claim_type}: no sections to read in {doc.paper_id}")
             return result
 
+        if self.self_consistency_n <= 1:
+            return self._single_pass(doc, sections)
+
+        passes = [
+            self._single_pass(doc, sections, rotation=i) for i in range(self.self_consistency_n)
+        ]
+        return _merge_passes(passes, self.self_consistency_n)
+
+    def _single_pass(
+        self, doc: StructuredDocument, sections: list[Section], rotation: int = 0
+    ) -> ExtractionResult:
+        """One extraction sweep over the sections, optionally reordered.
+
+        Rotation is what makes a second opinion an opinion at all. Extraction
+        runs at temperature 0 and responses are cached by prompt hash, so
+        re-issuing an identical prompt returns the identical answer - for free,
+        and worth nothing. Section 8.3.4 asks for different prompt orderings
+        precisely because the same facts presented in a different order is a
+        genuinely different question to ask.
+        """
+        result = ExtractionResult()
         for batch in self.batch_sections(doc, sections):
-            prompt = self.build_prompt(doc, batch)
-            completion = self._call(prompt, doc)
-            section_indices = [s.index for s in batch]
+            ordered = _rotate(batch, rotation)
+            completion = self._call(self.build_prompt(doc, ordered), doc)
+            section_indices = [s.index for s in ordered]
             for item in _as_items(completion.parsed):
                 self._admit(item, doc, section_indices, result)
         return result
@@ -375,3 +406,71 @@ def render_sections(doc: StructuredDocument, sections: list[Section]) -> str:
 
 def claim_type_of(extractor: Extractor | LLMExtractor) -> ClaimType:
     return extractor.claim_type  # type: ignore[return-value]
+
+
+def _rotate(sections: list[Section], rotation: int) -> list[Section]:
+    """Present the same sections starting from a different one."""
+    if not sections or rotation % len(sections) == 0:
+        return sections
+    offset = rotation % len(sections)
+    return sections[offset:] + sections[:offset]
+
+
+def agreement_key(claim: Claim) -> tuple[str, str, str]:
+    """What counts as "the same fact" across re-extractions.
+
+    Deliberately not the claim_id, which folds in the span. A model quoting a
+    different sentence for the same value on a second pass still reported the
+    same fact, and scoring that as disagreement would penalise exactly the
+    claims that were found twice.
+    """
+    payload = claim.payload
+    for field_name in ("canonical_name", "sub_problem", "label", "name", "metric"):
+        value = payload.get(field_name)
+        if isinstance(value, str) and value.strip():
+            name = value.strip().lower()
+            break
+    else:
+        name = claim.claim_id
+
+    raw = payload.get("value", payload.get("approach", ""))
+    if isinstance(raw, bool):
+        rendered = str(raw)
+    elif isinstance(raw, int | float):
+        rendered = f"{float(raw):.12g}"
+    else:
+        rendered = str(raw).strip().lower()
+
+    return (claim.type, name, rendered)
+
+
+def _merge_passes(passes: list[ExtractionResult], n: int) -> ExtractionResult:
+    """Combine re-extractions, scoring each fact by how often it appeared.
+
+    A fact every pass reported keeps full confidence. One that appeared once in
+    three is reported with its agreement recorded and its confidence scaled, so
+    the verifier can decline to promote it. Nothing is dropped here: a claim
+    seen once may still be correct, and discarding it silently would trade a
+    visible low-confidence entry for an invisible absence.
+    """
+    merged = ExtractionResult()
+    seen: dict[tuple[str, str, str], Claim] = {}
+    counts: dict[tuple[str, str, str], int] = {}
+
+    for result in passes:
+        merged.warnings.extend(result.warnings)
+        merged.rejected.extend(result.rejected)
+        for claim in result.claims:
+            key = agreement_key(claim)
+            counts[key] = counts.get(key, 0) + 1
+            seen.setdefault(key, claim)
+
+    for key, claim in sorted(seen.items(), key=lambda kv: kv[1].claim_id):
+        agreed = counts[key]
+        claim.verification.self_consistency = f"{agreed}/{n}"
+        claim.confidence = round(claim.confidence * (agreed / n), 4)
+        if agreed < n:
+            claim.verification.notes.append(f"reported in {agreed} of {n} extractions")
+        merged.claims.append(claim)
+
+    return merged
