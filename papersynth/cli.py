@@ -142,17 +142,18 @@ def run(
         bool,
         typer.Option(
             "--split-gate",
-            help="Review multi-paper clusters with the SplitterAgent. Recommended "
-            "with --embedding-merges; on its own it can over-split.",
+            help="Review every multi-paper cluster with the SplitterAgent, not "
+            "just semantically merged ones. On its own it can over-split.",
         ),
     ] = False,
-    embedding_merges: Annotated[
+    semantic_merges: Annotated[
         bool,
         typer.Option(
-            "--embedding-merges",
-            help="Also align differently-named claims by similarity. Needs --split-gate.",
+            "--semantic-merges/--no-semantic-merges",
+            help="Align concepts across papers that named them differently. "
+            "One call per claim type; every merge it proposes is split-gated.",
         ),
-    ] = False,
+    ] = True,
     adversarial_gaps: Annotated[
         bool,
         typer.Option(
@@ -212,8 +213,8 @@ def run(
         workspace=workspace,
         extractors=[e.strip() for e in extractors.split(",") if e.strip()],
         entailment=not no_entailment,
-        split_gate=split_gate or embedding_merges,
-        embedding_merges=embedding_merges,
+        split_gate=split_gate,
+        semantic_merges=semantic_merges,
         adversarial_gaps=adversarial_gaps,
         resume=resume,
         ledger=ledger,

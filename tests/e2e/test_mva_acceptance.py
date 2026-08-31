@@ -353,7 +353,7 @@ class TestArtifacts:
         manifest = yaml.safe_load((workspace.root / "manifest.yaml").read_text())
 
         assert manifest["config"]["temperature"] == 0.0
-        assert manifest["config"]["align_threshold"]
+        assert manifest["config"]["semantic_merges"] is not None
         assert manifest["extractors"] == ["hyperparameter"]
         assert manifest["spec_version"]
 

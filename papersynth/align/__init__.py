@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from papersynth.align.cluster import Aligner, AlignmentReport
-from papersynth.align.embed import Embedder, HashEmbedder, build_embedder, cosine
+from papersynth.align.semantic import MergeCandidate, propose_merges
+from papersynth.align.splitter import SplitterAgent
 
 __all__ = [
     "Aligner",
     "AlignmentReport",
-    "Embedder",
-    "HashEmbedder",
-    "build_embedder",
-    "cosine",
+    "MergeCandidate",
+    "SplitterAgent",
+    "propose_merges",
 ]

@@ -155,7 +155,7 @@ class TestAlignerIntegration:
             ClaimSet(paper_id="p1", claims=[a, c]),
             ClaimSet(paper_id="p2", claims=[b]),
         ]
-        _, report = Aligner(splitter=SplitterAgent(provider)).align(sets)
+        _, report = Aligner(splitter=SplitterAgent(provider), split_all=True).align(sets)
 
         assert report.split_reviewed == 1, "only the learning_rate cluster spans papers"
         assert provider.call_count == 1
@@ -168,31 +168,27 @@ class TestAlignerIntegration:
 
         provider = StubProvider(error=ProviderError("splitter unavailable"))
         sets = [ClaimSet(paper_id="p1", claims=[a]), ClaimSet(paper_id="p2", claims=[b])]
-        graph, report = Aligner(splitter=SplitterAgent(provider)).align(sets)
+        graph, report = Aligner(splitter=SplitterAgent(provider), split_all=True).align(sets)
 
         assert len(graph.clusters) == 1
         assert graph.clusters[0].is_multi_paper
         assert any("split gate failed" in n for n in report.notes)
 
-    def test_embedding_merges_are_off_without_a_gate(self):
-        """They fabricated two of three contradictions on the first real
-        corpus; the gate is what makes them safe."""
-        assert Aligner().embedding_merges is False
+    def test_exact_name_clusters_are_not_reviewed_by_default(self):
+        """Measured on BERT/RoBERTa/ALBERT: reviewing them split batch_size
+        into three concepts and lost the 256-against-8000 disagreement, the
+        corpus's headline finding, while gaining no rejection that condition
+        grouping had not already made."""
+        a = claim("p1", "learning_rate", 0.0001)
+        b = claim("p2", "learning_rate", 0.0003)
+        sets = [ClaimSet(paper_id="p1", claims=[a]), ClaimSet(paper_id="p2", claims=[b])]
 
-    def test_embedding_merges_stay_off_even_with_a_gate(self):
-        """Measured: they proposed five merges on the first real corpus and
-        the gate rejected all five, so they only bought calls spent undoing
-        them. Opt in explicitly for a corpus with divergent naming."""
-        assert Aligner(splitter=SplitterAgent(StubProvider([]))).embedding_merges is False
+        provider = StubProvider(lambda _p: assignments((a.claim_id, "lr"), (b.claim_id, "lr")))
+        graph, report = Aligner(splitter=SplitterAgent(provider)).align(sets)
 
-    def test_an_explicit_setting_still_wins(self):
-        assert Aligner(embedding_merges=True).embedding_merges is True
-        assert (
-            Aligner(
-                splitter=SplitterAgent(StubProvider([])), embedding_merges=False
-            ).embedding_merges
-            is False
-        )
+        assert report.split_reviewed == 0
+        assert provider.call_count == 0
+        assert graph.clusters[0].split_check == "n/a", "unreviewed, and says so"
 
     def test_a_rejected_merge_removes_the_fabricated_conflict(self):
         """End to end: the gate is what stops a false merge becoming a
@@ -209,7 +205,7 @@ class TestAlignerIntegration:
         provider = StubProvider(
             lambda _p: assignments((a.claim_id, "xxlarge"), (b.claim_id, "base"))
         )
-        gated, report = Aligner(splitter=SplitterAgent(provider)).align(sets)
+        gated, report = Aligner(splitter=SplitterAgent(provider), split_all=True).align(sets)
 
         assert ContradictionScan().run(gated) == []
         assert report.split_rejected == 1

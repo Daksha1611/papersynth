@@ -76,8 +76,6 @@ class Settings(BaseSettings):
     # -- pipeline ----------------------------------------------------------
     workspace: Path = Path("./runs")
     cache_dir: Path = Path("./.papersynth_cache")
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    align_threshold: float = Field(default=0.82, ge=0.0, le=1.0)
     #: Papers extracted concurrently. One by default, and that is not
     #: timidity: the binding constraint on a hosted free tier is tokens per
     #: minute, not latency. Groq allows 8,000 and one extraction prompt is
@@ -141,7 +139,6 @@ class Settings(BaseSettings):
             "models": {p: self.model_for(p) for p in self.provider_chain},
             "temperature": self.temperature,
             "self_consistency_n": self.self_consistency_n,
-            "align_threshold": self.align_threshold,
             "confidence_threshold": self.confidence_threshold,
             "prefer_latex": self.prefer_latex,
         }

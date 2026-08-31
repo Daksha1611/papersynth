@@ -56,6 +56,11 @@ Embedding merges would not have rescued it: the best A-B pair scores 0.401
 against a 0.82 threshold, and the best C-D pair 0.107. The relationship is
 semantic and no surface metric reaches it. This is not a threshold to tune.
 
+Fixed: `align/semantic.py` proposes cross-paper merges among the keys exact
+matching left unmatched, one call per claim type, and every merge it proposes
+faces the SplitterAgent. See `docs/design-amendments.md` section 8.4; pinned
+by R019.
+
 ## The pipeline manufactured a contradiction, then hid it
 
 Seven of ten verified hyperparameters come from one section of Kunzel:

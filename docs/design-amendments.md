@@ -307,3 +307,75 @@ Pass A's ML-training section gated on `any_hyperparameter`, which a field
 experiment's sample counts satisfy. 9 of 13 M8 gaps were "no learning rate /
 optimizer / dropout" on an agent-architecture corpus. The gate now requires a
 recognized training hyperparameter, not any hyperparameter.
+
+## §8.4 — Cross-paper alignment (M8 item 5)
+
+The last M8 finding, and the one that mattered most: zero of 37 clusters
+spanned more than one paper. Cross-paper contradiction detection is the
+product, and a run where nothing aligns reports "0 contradictions" for the
+same reason an empty run does. Nothing in the artifacts distinguishes the two.
+
+**Cause.** The blocking key is a string. For hyperparameters that is a strong
+and near-exact signal - `learning_rate` is `learning_rate` everywhere. For
+method claims, which align on `sub_problem`, it requires two papers to
+independently invent the same snake_case name for one question. CaMeL produced
+`security_mechanism`, `data_flow_security`, `capability_tagging`; NeMo produced
+`rail_specification_language`, `canonical_form_definition`. Same question, no
+shared key. 27 of 39 verified M8 claims were method claims, so this ate the
+corpus.
+
+**Embeddings were the designed fallback and cannot do it.** On M8 the best
+cross-paper pair scored 0.401 against a 0.82 threshold and the next best 0.107.
+On BERT/RoBERTa/ALBERT surface similarity proposed five merges and all five
+were wrong - `num_steps` with `warmup_steps`,
+`next_sentence_positive_ratio` with `next_sentence_negative_ratio` - which
+fabricated two of the three contradictions that run reported. Hyperparameter
+names are composed from shared words, so surface similarity tracks naming
+convention rather than meaning: too blunt to find the real merges and sharp
+enough to invent false ones. No threshold separates those two behaviours, so
+the embedding merge path is removed rather than defaulted off, along with
+`align_threshold` and `embedding_model`, which no longer decide anything.
+
+**Chosen: semantic merge proposal, split-gated.** Same shape as the §8.1
+triage fix - cheap exact key as the primary, one model call only where it
+fails, existing adversary on the output.
+
+- Exact-name blocking is unchanged and still primary.
+- `align/semantic.py` then takes the keys blocking left inside a single paper -
+  a key already spanning papers has found its match - and asks, in one call per
+  claim type, which of them name the same question. Keys already matched are
+  never offered, so the call scales with the failure rather than the corpus.
+- The answer is validated as a proposal about indices we supplied, not trusted:
+  a group survives only if it names two or more distinct keys across two or
+  more papers, no key may be claimed twice, and the existing unit and
+  value-type guards still veto. Single-paper groups are rejected outright -
+  collapsing quantities one paper stated separately is the M8 funnel failure
+  from item 1.
+- Every cluster a merge creates goes to the SplitterAgent regardless of the
+  `--split-gate` flag. This is the gate's designed job and what it was waiting
+  for; until now it had nothing to review.
+
+**The split gate's scope narrowed to match.** It previously reviewed every
+multi-paper cluster or none. It now always reviews semantically merged
+clusters and reviews exact-name clusters only under `--split-gate`, because
+reviewing those measured badly: on BERT/RoBERTa/ALBERT it split `batch_size`
+into three concepts and lost the genuine 256-against-8000 disagreement, the
+corpus's headline finding, while the splits it got right removed no false
+contradiction that condition grouping had not already prevented.
+
+**A latent bug this uncovered.** `splitter._merge_identical` re-merges groups
+holding the same value in the same unit, to undo the splitter separating three
+identical `max_sequence_length` values of 512. Method claims carry no value, so
+every method group keyed on the same empty value and the re-merge silently
+undid every split - on exactly the clusters semantic alignment creates, where
+the gate is the only review there is. It now applies only to claims that carry
+a value.
+
+**Manifest.** `align_threshold` left the reproducibility fingerprint with the
+code it configured. The per-run switches - `semantic_merges`,
+`split_all_clusters`, `entailment`, `adversarial_gaps` - live on the Pipeline
+rather than in Settings, so the fingerprint alone reported defaults the run
+may not have used. The manifest now merges both, which is what R-06 asks of it.
+
+R019 pins the finding, the fix, the reversibility of a merge, and that a model
+proposing nothing leaves exact-name blocking alone.

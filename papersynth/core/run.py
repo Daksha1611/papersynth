@@ -137,7 +137,7 @@ class Pipeline:
         extractors: list[str] | None = None,
         entailment: bool = True,
         split_gate: bool = False,
-        embedding_merges: bool = False,
+        semantic_merges: bool = True,
         adversarial_gaps: bool = False,
         resume: bool = False,
         ledger: Ledger | None = None,
@@ -147,19 +147,23 @@ class Pipeline:
         self.workspace = workspace
         self.extractors = extractors or ["hyperparameter"]
         self.entailment = entailment
-        #: Off by default, on the measurement rather than on principle. On
-        #: BERT/RoBERTa/ALBERT the gate split batch_size into three concepts
-        #: and lost the genuine BERT-256 against RoBERTa-8000 disagreement,
-        #: which is the corpus's headline finding, while the splits it got
-        #: right (hidden_dim into three model variants) removed no false
-        #: contradiction because the condition grouping had already kept those
+        #: Review EVERY multi-paper cluster, including ones exact-name
+        #: blocking built. Off by default, on the measurement rather than on
+        #: principle. On BERT/RoBERTa/ALBERT it split batch_size into three
+        #: concepts and lost the genuine BERT-256 against RoBERTa-8000
+        #: disagreement, the corpus's headline finding, while the splits it
+        #: got right (hidden_dim into three model variants) removed no false
+        #: contradiction because condition grouping had already kept those
         #: apart. One real finding lost, none gained.
         #:
-        #: It remains worth enabling where its designed job actually arises:
-        #: alongside embedding merges, where it correctly rejected all five
-        #: proposals including num_steps merged with warmup_steps.
+        #: Clusters built by a semantic merge are reviewed regardless, so the
+        #: gate is never absent where a merge was actually proposed.
         self.split_gate = split_gate
-        self.embedding_merges = embedding_merges
+        #: Align concepts across papers that named them differently (section
+        #: 8.4). On by default: it is the only mechanism that can, and without
+        #: it the M8 corpus produced zero cross-paper clusters and reported no
+        #: contradictions, which reads exactly like a clean corpus.
+        self.semantic_merges = semantic_merges
         #: Pass B. One call, run against the assembled spec rather than the
         #: papers, so the questions it raises are ones a real implementer would
         #: actually face.
@@ -196,10 +200,9 @@ class Pipeline:
         result.claims = {c.claim_id: c for cs in verified_sets for c in cs.claims}
 
         graph, alignment = Aligner(
-            threshold=self.settings.align_threshold,
-            embedding_model=self.settings.embedding_model if self.embedding_merges else None,
-            provider=self.provider if self.split_gate else None,
-            embedding_merges=self.embedding_merges,
+            provider=self.provider,
+            semantic_merges=self.semantic_merges,
+            split_all=self.split_gate,
         ).align(verified_sets)
         if self.workspace:
             self.workspace.write_json("03_concept_graph.json", graph.model_dump())
@@ -543,7 +546,16 @@ class Pipeline:
                 "stages": list(STAGES),
                 # Everything that can change model output, so a spec differing
                 # from a prior run is attributable to config rather than drift.
-                "config": self.settings.reproducibility_fingerprint(),
+                # The per-run switches live on the Pipeline rather than in
+                # Settings, so the fingerprint alone would report a default the
+                # run did not use - which is the drift it exists to rule out.
+                "config": {
+                    **self.settings.reproducibility_fingerprint(),
+                    "semantic_merges": self.semantic_merges,
+                    "split_all_clusters": self.split_gate,
+                    "entailment": self.entailment,
+                    "adversarial_gaps": self.adversarial_gaps,
+                },
             },
         )
         # Coverage is written after the run completes; see _write_coverage.

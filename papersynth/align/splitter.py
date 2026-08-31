@@ -186,6 +186,11 @@ def _merge_identical(groups: list[list[Claim]]) -> list[list[Claim]]:
 
     Observed: the splitter separated three identical max_sequence_length
     values of 512 across the BERT corpus.
+
+    It applies only to claims that carry a value. A method claim carries none,
+    so every method group would key on the same empty value and the re-merge
+    would silently undo every split the gate made - on exactly the clusters
+    semantic alignment creates, where the gate is the only review there is.
     """
     if len(groups) <= 1:
         return groups
@@ -194,6 +199,9 @@ def _merge_identical(groups: list[list[Claim]]) -> list[list[Claim]]:
     ungrouped: list[list[Claim]] = []
 
     for group in groups:
+        if any(c.payload.get("value") is None for c in group):
+            ungrouped.append(group)
+            continue
         values = {_value_key(c) for c in group}
         if len(values) == 1:
             by_value[values.pop()].extend(group)

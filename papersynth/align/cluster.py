@@ -9,20 +9,31 @@ contradiction - visible, recoverable, and harmless.
 So the primary key is the canonical name, which for hyperparameters is a
 strong and near-exact signal.
 
-Embedding-proposed merges are OFF by default, and that is an empirical finding
-rather than caution. On BERT/RoBERTa/ALBERT they fired five times and were
-wrong five times: num_steps merged with warmup_steps, and
-next_sentence_positive_ratio with next_sentence_negative_ratio. A
-bag-of-ngrams embedder scores those pairs highly because they share most of
-their characters, which is exactly the wrong signal - hyperparameter names are
-built by composing shared words, so surface similarity tracks naming
-convention rather than meaning. Two of the three contradictions that run
-reported were fabricated by these merges.
+It is not a key at all for method claims, which align on `sub_problem` - the
+question a design decision answers - and that requires two papers to
+independently invent the same snake_case name. On the M8 corpus they never
+did, and zero of 37 clusters spanned more than one paper. A run in which
+nothing aligns reports "0 contradictions" for the same reason an empty run
+does, so this failure is invisible in every artifact the system produces.
 
-They can be re-enabled once the SplitterAgent exists to reject a proposed merge
-(section 8.4), which is the gate the design always intended to sit behind them.
-Until then a false split costs a missed conflict, while a false merge invents
-one and burns the reviewer's trust in the whole list (section 9).
+What closes the gap is `semantic.propose_merges`: one call per claim type over
+the keys exact-name blocking left unmatched, asking which of them name the
+same question. Embeddings were tried first and cannot do it - the best M8
+cross-paper pair scored 0.401 against a 0.82 threshold, while on
+BERT/RoBERTa/ALBERT surface similarity proposed five merges and all five were
+wrong (num_steps with warmup_steps, next_sentence_positive_ratio with
+next_sentence_negative_ratio), fabricating two of the three contradictions
+that run reported. Names composed from shared words make surface similarity
+track naming convention rather than meaning, so the embedding path is gone
+rather than merely defaulted off.
+
+No semantic merge is admitted unreviewed. Every cluster one creates goes to
+the SplitterAgent regardless of `split_all`, which is the gate's designed job
+(section 8.4) and what it was waiting for. Exact-name clusters are not
+reviewed by default, on measurement: on BERT/RoBERTa/ALBERT reviewing them
+split batch_size into three concepts and lost the genuine 256-against-8000
+disagreement, the corpus's headline finding, while gaining nothing that
+condition grouping had not already kept apart.
 """
 
 from __future__ import annotations
@@ -30,7 +41,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from papersynth.align.embed import Embedder, build_embedder, cosine
+from papersynth.align.semantic import MergeCandidate, propose_merges
 from papersynth.align.splitter import SplitterAgent
 from papersynth.core import ids
 from papersynth.core.models import (
@@ -48,7 +59,7 @@ class AlignmentReport:
     clusters: int = 0
     multi_paper_clusters: int = 0
     merged_by_name: int = 0
-    merged_by_embedding: int = 0
+    merged_by_semantic: int = 0
     split_reviewed: int = 0
     split_rejected: int = 0
     notes: list[str] = None  # type: ignore[assignment]
@@ -85,27 +96,23 @@ class Aligner:
     def __init__(
         self,
         *,
-        embedder: Embedder | None = None,
-        embedding_model: str | None = None,
-        threshold: float = 0.82,
-        embedding_merges: bool | None = None,
-        splitter: SplitterAgent | None = None,
         provider: LLMProvider | None = None,
+        splitter: SplitterAgent | None = None,
+        semantic_merges: bool = True,
+        split_all: bool = False,
     ) -> None:
-        # build_embedder falls back to hashing when the configured model is
-        # not installed, so a missing sentence-transformers degrades alignment
-        # quality rather than failing the run.
-        self.embedder = embedder or build_embedder(embedding_model)
-        self.threshold = threshold
+        self.provider = provider
         self.splitter = splitter or (SplitterAgent(provider) if provider else None)
-        #: Off by default even with the gate present. Measured on
-        #: BERT/RoBERTa/ALBERT: embedding merges proposed five merges and the
-        #: gate rejected all five, so they contributed nothing except calls
-        #: spent undoing them. The gate earns its keep on same-name clusters
-        #: instead - hidden_dim aligning three model variants - which does not
-        #: depend on embedding merges at all. Opt in explicitly if a corpus
-        #: uses genuinely divergent naming.
-        self.embedding_merges = bool(embedding_merges)
+        #: On by default when a provider exists. This is the only mechanism
+        #: that aligns differently-named concepts, and without it a corpus
+        #: whose papers do not share vocabulary produces no cross-paper
+        #: clusters and therefore no findings at all.
+        self.semantic_merges = semantic_merges
+        #: Review every multi-paper cluster, not only the semantically merged
+        #: ones. Off by default because on BERT/RoBERTa/ALBERT it split
+        #: batch_size into three concepts and lost the corpus's headline
+        #: disagreement. Semantic merges are reviewed either way.
+        self.split_all = split_all
 
     def align(self, claim_sets: list[ClaimSet]) -> tuple[ConceptGraph, AlignmentReport]:
         report = AlignmentReport()
@@ -120,10 +127,17 @@ class Aligner:
         for claim in claims:
             by_type[claim.type].append(claim)
 
+        #: Clusters a semantic merge created. They are reviewed by the split
+        #: gate whatever `split_all` says: a proposed merge that no adversary
+        #: has looked at is exactly the false merge section 8.4 warns about.
+        review_required: set[str] = set()
         for claim_type, group in sorted(by_type.items()):
-            graph.clusters.extend(self._align_block(claim_type, group, report))
+            for cluster, was_proposed in self._align_block(claim_type, group, report):
+                graph.clusters.append(cluster)
+                if was_proposed:
+                    review_required.add(cluster.cluster_id)
 
-        graph.clusters = self._apply_split_gate(graph, report)
+        graph.clusters = self._apply_split_gate(graph, report, review_required)
 
         for cluster in graph.clusters:
             for alias in cluster.symbol_aliases:
@@ -134,13 +148,19 @@ class Aligner:
         return graph, report
 
     def _apply_split_gate(
-        self, graph: ConceptGraph, report: AlignmentReport
+        self,
+        graph: ConceptGraph,
+        report: AlignmentReport,
+        review_required: set[str],
     ) -> list[ConceptCluster]:
         """Let the splitter reject merges the aligner proposed.
 
         Only multi-paper clusters are reviewed: a single-paper cluster cannot
         host a cross-paper contradiction, so splitting it changes nothing and
-        would spend a call to learn that.
+        would spend a call to learn that. Among those, semantically merged
+        clusters are always reviewed and exact-name clusters only under
+        `split_all` - the gate earns its keep on the former and measurably
+        costs findings on the latter.
 
         A splitter failure leaves the cluster intact rather than dropping it.
         Losing a cluster because a review call failed would silently remove a
@@ -155,6 +175,9 @@ class Aligner:
         out: list[ConceptCluster] = []
         for cluster in graph.clusters:
             if not cluster.is_multi_paper:
+                out.append(cluster)
+                continue
+            if not (self.split_all or cluster.cluster_id in review_required):
                 out.append(cluster)
                 continue
 
@@ -174,8 +197,12 @@ class Aligner:
 
     def _align_block(
         self, claim_type: str, claims: list[Claim], report: AlignmentReport
-    ) -> list[ConceptCluster]:
-        """Align within one claim type. Never across - an equation is not a dataset."""
+    ) -> list[tuple[ConceptCluster, bool]]:
+        """Align within one claim type. Never across - an equation is not a dataset.
+
+        Returns each cluster with a flag saying whether a semantic merge built
+        it, so the caller knows which ones must face the split gate.
+        """
         buckets: dict[str, list[Claim]] = defaultdict(list)
         for claim in claims:
             buckets[_alignment_key(claim)].append(claim)
@@ -185,37 +212,67 @@ class Aligner:
             report.merged_by_name += len(claims) - len(keys)
 
         union = _UnionFind(keys)
-        if self.embedding_merges and len(keys) > 1:
-            self._merge_similar(keys, buckets, union, report)
+        merged_keys: set[str] = set()
+        if self.semantic_merges and len(keys) > 1:
+            merged_keys = self._merge_semantic(claim_type, keys, buckets, union, report)
 
         grouped: dict[str, list[Claim]] = defaultdict(list)
         for key in keys:
             grouped[union.find(key)].extend(buckets[key])
 
-        return [self._build_cluster(claim_type, members) for _, members in sorted(grouped.items())]
+        proposed_roots = {union.find(k) for k in merged_keys}
+        return [
+            (self._build_cluster(claim_type, members), root in proposed_roots)
+            for root, members in sorted(grouped.items())
+        ]
 
-    def _merge_similar(
+    def _merge_semantic(
         self,
+        claim_type: str,
         keys: list[str],
         buckets: dict[str, list[Claim]],
         union: _UnionFind,
         report: AlignmentReport,
-    ) -> None:
-        """Propose merges between differently named claims, above threshold."""
-        descriptions = [_role_description(buckets[k][0]) for k in keys]
-        vectors = self.embedder.embed(descriptions)
+    ) -> set[str]:
+        """Ask a model which unmatched keys name the same concept.
 
-        for i in range(len(keys)):
-            for j in range(i + 1, len(keys)):
-                if cosine(vectors[i], vectors[j]) < self.threshold:
-                    continue
-                if not _safe_to_merge(buckets[keys[i]][0], buckets[keys[j]][0]):
-                    continue
-                if union.union(keys[i], keys[j]):
-                    report.merged_by_embedding += 1
+        Only keys that exact-name blocking left inside a single paper are
+        offered. A key already spanning papers has found its match, and
+        putting it up for re-grouping could only take it away from one it
+        already earned by exact agreement.
+        """
+        candidates = [
+            MergeCandidate(
+                key=key,
+                paper_id=buckets[key][0].paper_id,
+                description=_role_description(buckets[key][0]),
+            )
+            for key in keys
+            if len({c.paper_id for c in buckets[key]}) == 1
+        ]
+
+        groups, notes = propose_merges(claim_type, candidates, provider=self.provider)
+        report.notes.extend(notes)
+
+        merged: set[str] = set()
+        for group in groups:
+            # The unit and value-type guards still apply. A model calling two
+            # things one concept does not make a warmup in steps and a warmup
+            # in epochs comparable, and merging them would invent a value
+            # conflict out of a unit mismatch.
+            head = group[0]
+            for other in group[1:]:
+                if not _safe_to_merge(buckets[head][0], buckets[other][0]):
                     report.notes.append(
-                        f"merged {keys[i]!r} with {keys[j]!r} on embedding similarity"
+                        f"rejected semantic merge of {head!r} with {other!r}: "
+                        "incompatible unit or value type"
                     )
+                    continue
+                if union.union(head, other):
+                    report.merged_by_semantic += 1
+                    merged.update((head, other))
+                    report.notes.append(f"merged {head!r} with {other!r} on semantic alignment")
+        return merged
 
     def _build_cluster(self, claim_type: str, members: list[Claim]) -> ConceptCluster:
         members = sorted(members, key=lambda c: c.claim_id)
@@ -231,8 +288,9 @@ class Aligner:
             symbol_aliases=aliases,
             papers=sorted({c.paper_id for c in members}),
             agreement=_agreement(members),
-            # No SplitterAgent in the MVA; the gate is recorded as not run
-            # rather than as passed, so the artifact never overstates it.
+            # Not reviewed yet. The gate overwrites this with pass or fail on
+            # the clusters it looks at; the rest keep "n/a" so the artifact
+            # never records a review that did not happen.
             split_check="n/a",
         )
 
@@ -250,20 +308,33 @@ def _alignment_key(claim: Claim) -> str:
     return claim.claim_id
 
 
-def _role_description(claim: Claim) -> str:
-    """Text an embedder can compare. Deliberately excludes the value.
+#: Fields that say what a claim is ABOUT. `value`, `approach` and the like are
+#: deliberately absent: they say what a paper concluded, and two papers must
+#: land in one cluster precisely when they concluded differently.
+_ROLE_FIELDS = ("role", "unit", "applies_to", "component_id", "metric", "dataset")
 
-    Two papers disagreeing about a learning rate must still land in one
-    cluster; embedding the value would push them apart precisely when the
-    disagreement is the thing worth finding.
+
+def _role_description(claim: Claim) -> str:
+    """One line describing what a claim is about, for the merge proposer.
+
+    Deliberately excludes the value and the chosen approach. Two papers
+    disagreeing about a learning rate, or answering one design question with
+    rival methods, must still land in one cluster - describing them by their
+    answers would push them apart at exactly the moment the disagreement
+    becomes worth finding.
     """
     payload = claim.payload
     parts = [_alignment_key(claim).replace("_", " ")]
-    for field in ("role", "unit", "applies_to"):
+    for field in _ROLE_FIELDS:
         value = payload.get(field)
-        if isinstance(value, str) and value and value != "global":
-            parts.append(value)
-    return " ".join(parts)
+        if isinstance(value, str) and value.strip() and value != "global":
+            parts.append(value.strip())
+    # The section a claim came from is often the only hint of what a bare
+    # snake_case key means, and it costs nothing to include.
+    section = claim.provenance.section
+    if section:
+        parts.append(f"(section: {section})")
+    return " ".join(dict.fromkeys(parts))
 
 
 def _safe_to_merge(a: Claim, b: Claim) -> bool:

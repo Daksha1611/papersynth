@@ -914,6 +914,7 @@ class TestR014DetectorRanOnTheWrongClaimType:
 #   R016 = SpecBuilder dropping method/result claims
 #   R017 = per-batch extraction failure losing the rest
 #   R018 = semantic triage on a paper with no regex-matching titles
+#   R019 = cross-paper alignment finding nothing on divergent naming
 
 
 def _kunzel_funnel_claims():
@@ -1397,3 +1398,144 @@ class TestR018SemanticTriageOnUnfamiliarPaper:
         HyperparameterExtractor(provider).applicable_sections(doc)
 
         assert provider.call_count == 0, "no triage call for a fixture-shaped paper"
+
+
+class TestR019CrossPaperAlignmentOnDivergentNaming:
+    """M8 finding 5. Five papers, 37 clusters, zero spanning more than one
+    paper, so no detector could fire and the run reported "0 contradictions" -
+    the number an empty corpus produces.
+
+    Method claims align on `sub_problem`, which needs two papers to
+    independently invent the same snake_case name for one question. CaMeL
+    produced security_mechanism, data_flow_security, capability_tagging; NeMo
+    produced rail_specification_language, canonical_form_definition. Same
+    question, no shared key.
+
+    Embeddings are not the fix and this pins that too: the best M8 cross-paper
+    pair scored 0.401 against a 0.82 threshold.
+    """
+
+    @staticmethod
+    def _claim(paper, sub_problem, approach):
+        from papersynth.core import ids
+        from papersynth.core.models import Claim, Provenance
+
+        claim = Claim.build(
+            paper_id=paper,
+            claim_type="method",
+            provenance=Provenance(
+                paper_id=paper,
+                span_id=f"{paper}#s1.p0.0",
+                section="Design",
+                page=1,
+                char_start=0,
+                char_end=40,
+                quote_hash=ids.quote_hash(approach),
+                extraction_method="llm",
+                extractor_version="method@1.0.0",
+                confidence=0.9,
+            ),
+            payload={
+                "sub_problem": sub_problem,
+                "approach": approach,
+                "adopted": True,
+                "alternatives_rejected": [],
+                "rationale": None,
+                "attribution": "own",
+                "applies_to": "global",
+                "condition": None,
+                "stated_explicitly": True,
+            },
+        )
+        claim.status = "verified"
+        return claim
+
+    def _corpus(self):
+        from papersynth.core.models import ClaimSet
+
+        camel = self._claim("camel", "data_flow_security", "capability tags on every value")
+        nemo = self._claim("nemo", "rail_specification_language", "colang canonical forms")
+        return (
+            camel,
+            nemo,
+            [
+                ClaimSet(paper_id="camel", claims=[camel]),
+                ClaimSet(paper_id="nemo", claims=[nemo]),
+            ],
+        )
+
+    def test_exact_names_alone_align_nothing(self):
+        """The regression itself: this is what M8 produced."""
+        from papersynth.align import Aligner
+
+        _, _, sets = self._corpus()
+        graph, report = Aligner(provider=None).align(sets)
+
+        assert report.multi_paper_clusters == 0
+        assert len(graph.clusters) == 2, "two singletons no detector can compare"
+
+    def test_semantic_alignment_brings_them_together(self):
+        from papersynth.align import Aligner
+        from papersynth.align.splitter import SplitterAgent
+        from papersynth.llm.stub import StubProvider
+
+        camel, nemo, sets = self._corpus()
+        merge = StubProvider(
+            lambda _p: {
+                "groups": [{"concept": "policy_enforcement", "members": [0, 1]}],
+                "reason": "both ask how untrusted content is prevented from acting",
+            }
+        )
+        keep = StubProvider(
+            lambda _p: {
+                "assignments": [
+                    {"claim_id": camel.claim_id, "concept": "policy_enforcement"},
+                    {"claim_id": nemo.claim_id, "concept": "policy_enforcement"},
+                ],
+                "reason": "one question, two answers",
+            }
+        )
+        _, report = Aligner(provider=merge, splitter=SplitterAgent(keep)).align(sets)
+
+        assert report.merged_by_semantic == 1
+        assert report.multi_paper_clusters == 1
+        assert report.split_reviewed == 1, "a semantic merge is never admitted unreviewed"
+
+    def test_the_merge_is_reviewable_and_reversible(self):
+        """The gate is what makes proposing merges safe at all. A false merge
+        fabricates a contradiction; a false split only yields two singletons."""
+        from papersynth.align import Aligner
+        from papersynth.align.splitter import SplitterAgent
+        from papersynth.llm.stub import StubProvider
+
+        camel, nemo, sets = self._corpus()
+        merge = StubProvider(
+            lambda _p: {"groups": [{"concept": "policy", "members": [0, 1]}], "reason": "x"}
+        )
+        reject = StubProvider(
+            lambda _p: {
+                "assignments": [
+                    {"claim_id": camel.claim_id, "concept": "data_flow_control"},
+                    {"claim_id": nemo.claim_id, "concept": "dialogue_rails"},
+                ],
+                "reason": "one governs data flow, the other governs dialogue",
+            }
+        )
+        graph, report = Aligner(provider=merge, splitter=SplitterAgent(reject)).align(sets)
+
+        assert report.split_rejected == 1
+        assert len(graph.clusters) == 2
+        assert all(c.split_check == "fail" for c in graph.clusters)
+
+    def test_an_unrelated_pair_is_not_forced_together(self):
+        """A model that proposes nothing must leave exact-name blocking alone.
+        Silence is the common and correct answer."""
+        from papersynth.align import Aligner
+        from papersynth.llm.stub import StubProvider
+
+        _, _, sets = self._corpus()
+        provider = StubProvider(lambda _p: {"groups": [], "reason": "no shared question"})
+        graph, report = Aligner(provider=provider, splitter=None).align(sets)
+
+        assert report.merged_by_semantic == 0
+        assert len(graph.clusters) == 2
