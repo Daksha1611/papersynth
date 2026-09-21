@@ -29,6 +29,13 @@ ClaimType = Literal[
     #: hyperparameter because it carries no value to compare - two papers can
     #: disagree completely without a number between them.
     "method",
+    #: A definition: what a paper takes a term to MEAN. Distinct from a method
+    #: claim because the disagreement is not over which approach to take but
+    #: over what a shared word denotes - two papers both measuring "attack
+    #: success" compute different numbers when they count different events as
+    #: one. No value and no adopt/reject stance separates them; only the
+    #: operational criterion does, which is what DEFINITION_CONFLICT compares.
+    "definition",
 ]
 ClaimStatus = Literal["extracted", "verified", "rejected", "superseded"]
 CheckResult = Literal["pass", "fail", "warn", "n/a"]

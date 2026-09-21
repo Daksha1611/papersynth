@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papersynth.dev/schemas/payload.definition.json",
+  "title": "definition payload",
+  "description": "What a paper takes a term to mean. Carries no numeric value and no adopt/reject stance, so DEFINITION_CONFLICT is the only detector that can see a disagreement here: two papers measuring the same named quantity under incompatible criteria compute different numbers and never know it.",
+  "type": "object",
+  "properties": {
+    "term": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Normalized name of the term being defined, e.g. attack_success or task_failure. Two papers align on this, not on the definition text - named after the definition, two papers that genuinely disagree about what a word means would land in different clusters and never be compared."
+    },
+    "definition": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The term's meaning as the paper states it, in the paper's own words."
+    },
+    "criterion": {
+      "type": ["string", "null"],
+      "description": "The operational test the definition reduces to - the thing code would actually check. 'the agent executes any action outside the granted capability set' is a criterion; 'a security violation' is not. This is the field DEFINITION_CONFLICT compares, because two definitions that read differently but reduce to the same check are not in conflict, and two that read similarly but reduce to different checks are."
+    },
+    "attribution": {
+      "type": "string",
+      "enum": ["own", "prior_work"],
+      "description": "Whether this is the paper's own definition or a restatement of another work's. A related-work section quoting a predecessor's definition is not this paper adopting it."
+    },
+    "applies_to": { "type": "string" },
+    "condition": { "type": ["string", "null"] },
+    "stated_explicitly": { "type": "boolean" }
+  },
+  "required": ["term", "definition", "stated_explicitly"],
+  "additionalProperties": false
+}
