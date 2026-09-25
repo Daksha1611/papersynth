@@ -383,7 +383,15 @@ def _as_items(parsed: Any) -> list[Any]:
     if isinstance(parsed, list):
         return parsed
     if isinstance(parsed, dict):
-        for key in ("hyperparameters", "equations", "algorithms", "items", "claims", "results"):
+        for key in (
+            "hyperparameters",
+            "equations",
+            "algorithms",
+            "definitions",
+            "items",
+            "claims",
+            "results",
+        ):
             if isinstance(parsed.get(key), list):
                 return parsed[key]
         # A single object is a single claim.
@@ -478,7 +486,7 @@ def agreement_key(claim: Claim) -> tuple[str, str, str]:
     claims that were found twice.
     """
     payload = claim.payload
-    for field_name in ("canonical_name", "sub_problem", "label", "name", "metric"):
+    for field_name in ("canonical_name", "sub_problem", "term", "label", "name", "metric"):
         value = payload.get(field_name)
         if isinstance(value, str) and value.strip():
             name = value.strip().lower()
@@ -486,7 +494,7 @@ def agreement_key(claim: Claim) -> tuple[str, str, str]:
     else:
         name = claim.claim_id
 
-    raw = payload.get("value", payload.get("approach", ""))
+    raw = payload.get("value", payload.get("approach", payload.get("criterion", "")))
     if isinstance(raw, bool):
         rendered = str(raw)
     elif isinstance(raw, int | float):
