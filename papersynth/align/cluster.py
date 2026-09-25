@@ -300,8 +300,18 @@ def _alignment_key(claim: Claim) -> str:
     payload = claim.payload
     # sub_problem first: a method claim aligns on the question it answers, not
     # on the approach it names, or two papers proposing rival answers would
-    # never be compared.
-    for field in ("canonical_name", "sub_problem", "component_id", "name", "label", "metric"):
+    # never be compared. `term` plays the same role for a definition claim: two
+    # papers align on the word being defined, not on what they take it to mean,
+    # so a disagreement about the meaning of one term lands in one cluster.
+    for field in (
+        "canonical_name",
+        "sub_problem",
+        "term",
+        "component_id",
+        "name",
+        "label",
+        "metric",
+    ):
         value = payload.get(field)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
@@ -385,4 +395,14 @@ def _normalized_value(claim: Claim) -> str:
         return f"{value:.10g}"
     if isinstance(value, str):
         return value.strip().lower()
+    if value is None:
+        # Valueless claim types still need a notion of "the same answer" for the
+        # agreement label. A definition's answer is its criterion (the prose
+        # falls in behind it); a method's is its approach. Without this every
+        # definition cluster keys on str(None) and reports "unanimous" however
+        # sharply the papers actually disagree.
+        for field in ("criterion", "definition", "approach"):
+            text = claim.payload.get(field)
+            if isinstance(text, str) and text.strip():
+                return text.strip().lower()
     return str(value)
