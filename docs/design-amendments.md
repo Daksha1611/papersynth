@@ -379,3 +379,60 @@ may not have used. The manifest now merges both, which is what R-06 asks of it.
 
 R019 pins the finding, the fix, the reversibility of a merge, and that a model
 proposing nothing leaves exact-name blocking alone.
+
+---
+
+## §7.6 — DEFINITION_CONFLICT (M8 prediction 2)
+
+The conflict taxonomy named five types. Three had detectors; `DEFINITION_CONFLICT`
+and `SCOPE_CONFLICT` were declared in the schema, referenced by the reconcile
+policy, and produced by nothing. M8 prediction 2 was that the agent-safety
+corpus would surface a definition conflict - papers C and D both report an
+"attack success" rate while counting different events as success - and the
+pipeline could not have caught it, because no claim type carried a definition
+and no detector compared one.
+
+**Why a method claim is the wrong home for it.** A method conflict is a choice
+between approaches: an engineer resolves it by picking one. A definition
+conflict is not a choice - it is the discovery that two papers' numbers were
+never comparable. Folding definitions into `method` would have put "which
+approach" and "what does this word mean" through one detector whose severity
+and resolution logic fit only the first. They are different questions with
+different resolutions, so `definition` is its own claim type.
+
+**The comparison is on the criterion, not the prose.** A definition claim
+carries the term, the paper's definition, and - the load-bearing field - the
+operational `criterion` the definition reduces to. Two definitions conflict
+through their criteria: identical prose with different criteria conflict, and
+different prose with the same criterion does not. The detector reuses the
+method detector's machinery exactly: union-find over a token-set similarity to
+fold the wording drift that section-batch extraction introduces, grouped by
+condition first. A paper that states no criterion falls back to its definition
+text, so a loosely-defined term is still compared rather than silently matching
+everything.
+
+**Severity splits on operationality.** When the conflicting definitions each
+reduce to a concrete criterion, code computes genuinely different quantities
+and the harness cannot be written without deciding which - BLOCKING by the
+section 7.6 ladder, the same bar RESULT_CONFLICT fails to meet. A conflict
+visible only in prose, with no criterion extracted, needs a human to read both
+before it is even certain to be real, so it escalates as MATERIAL.
+
+**Resolution stays in the policy.** Unlike METHOD_CONFLICT, the detector marks
+these `auto_resolvable=True`, because a definition has a right answer when its
+author is known: the paper that introduced a term defines it. That is
+`prefer_primary_source`, which fires only when primacy is known - and it is
+not, until a citation-graph signal exists, so a new `definition_conflicts_escalate`
+rule escalates them in the meantime. The restraint lives in config, named and
+auditable, rather than hard-coded in the detector. This is exactly the shape
+`core/run.py::_primary_sources` already anticipated: the rule stays, the signal
+is absent, the conflict escalates, and "absent beats guessed" holds.
+
+`SCOPE_CONFLICT` remains undetected and deliberately so: the existing
+`prefer_scoped_over_global` policy rule already resolves a scoped-versus-global
+value disagreement as a VALUE_CONFLICT, and no M8 evidence yet shows a scope
+conflict that is not already caught that way. It stays declared, unbuilt, and
+honest about being unbuilt.
+
+R020 pins the finding, the criterion-not-prose comparison, the operational
+severity split, and that agreement within one criterion is not reported.
