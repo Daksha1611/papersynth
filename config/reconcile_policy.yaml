@@ -90,6 +90,19 @@ rules:
     select: first_by_claim_id
     confidence: high
 
+  - id: definition_conflicts_escalate
+    description: >
+      Two papers meaning different things by one term. Evaluated after
+      prefer_primary_source, so a known originating paper still decides it; when
+      primacy is unknown - which is always, until a citation-graph signal
+      exists - there is no principled way to pick whose meaning is canonical,
+      and silently choosing one makes two incomparable metrics look like one.
+      A human decides which definition the spec adopts.
+    applies_to: [DEFINITION_CONFLICT]
+    when: always
+    action: ESCALATED
+    confidence: n/a
+
 fallback:
   action: ESCALATED
   confidence: n/a
