@@ -915,6 +915,7 @@ class TestR014DetectorRanOnTheWrongClaimType:
 #   R017 = per-batch extraction failure losing the rest
 #   R018 = semantic triage on a paper with no regex-matching titles
 #   R019 = cross-paper alignment finding nothing on divergent naming
+#   R020 = two papers defining one term differently (DEFINITION_CONFLICT)
 
 
 def _kunzel_funnel_claims():
@@ -1539,3 +1540,130 @@ class TestR019CrossPaperAlignmentOnDivergentNaming:
 
         assert report.merged_by_semantic == 0
         assert len(graph.clusters) == 2
+
+
+class TestR020DefinitionConflictOnSharedTerm:
+    """M8 prediction 2. Two agent-safety papers both report an "attack success"
+    rate; one counts any out-of-policy tool call, the other only a call that
+    reaches a harmful end state. The numbers are not comparable and nothing in
+    either paper says so. Before the definition claim type and its detector
+    existed, no claim carried a definition and no detector compared one, so the
+    run reported no conflict.
+
+    This pins four things: the conflict fires, agreement within one criterion
+    does not, severity splits on whether a criterion was extracted, and the
+    policy escalates with a named rule rather than silently picking a side.
+    """
+
+    @staticmethod
+    def _claim(paper, criterion, definition="an attack succeeds"):
+        from papersynth.core import ids
+        from papersynth.core.models import Claim, Provenance
+
+        claim = Claim.build(
+            paper_id=paper,
+            claim_type="definition",
+            provenance=Provenance(
+                paper_id=paper,
+                span_id=f"{paper}#s1.p0.0",
+                section="Threat Model",
+                page=1,
+                char_start=0,
+                char_end=40,
+                quote_hash=ids.quote_hash(criterion or definition),
+                extraction_method="llm",
+                extractor_version="definition@1.0.0",
+                confidence=0.95,
+            ),
+            payload={
+                "term": "attack_success",
+                "definition": definition,
+                "criterion": criterion,
+                "attribution": "own",
+                "applies_to": "global",
+                "condition": None,
+                "stated_explicitly": True,
+            },
+        )
+        claim.status = "verified"
+        return claim
+
+    def _corpus(self, crit_a, crit_b, **kw):
+        from papersynth.core.models import ClaimSet
+
+        a = self._claim("agentdojo", crit_a, **kw)
+        b = self._claim("toolemu", crit_b, **kw)
+        return a, b, [
+            ClaimSet(paper_id="agentdojo", claims=[a]),
+            ClaimSet(paper_id="toolemu", claims=[b]),
+        ]
+
+    def _detect(self, sets):
+        from papersynth.align import Aligner
+        from papersynth.contradict import detect
+
+        graph, _ = Aligner(provider=None, semantic_merges=False).align(sets)
+        return graph, detect(graph)
+
+    def test_shared_term_different_criteria_conflicts(self):
+        """The regression: one term, two operational criteria, one BLOCKING
+        conflict that the pipeline previously could not see."""
+        _, _, sets = self._corpus(
+            "the agent calls any tool outside the user-granted capability set",
+            "the agent reaches a state the user marked harmful",
+        )
+        graph, found = self._detect(sets)
+
+        multi = [c for c in graph.clusters if c.is_multi_paper]
+        assert len(multi) == 1, "both papers define one term, so they align on it"
+        assert multi[0].agreement == "conflicting"
+        assert [c.type for c in found] == ["DEFINITION_CONFLICT"]
+        assert found[0].severity == "BLOCKING", "operational criteria differ; code diverges"
+        assert len(found[0].positions) == 2
+
+    def test_same_criterion_worded_differently_is_agreement(self):
+        """Different prose, same check. Reporting this would ask a reviewer to
+        adjudicate paraphrase."""
+        _, _, sets = self._corpus(
+            "the agent calls a tool outside the granted capability set",
+            "agent calls a tool outside the granted capability set",
+        )
+        _, found = self._detect(sets)
+        assert found == [], "one criterion in two wordings is not a conflict"
+
+    def test_prose_only_conflict_is_material_not_blocking(self):
+        """No criterion extracted on either side: the disagreement is real but a
+        human must read both definitions to confirm it, so it escalates as
+        MATERIAL rather than blocking emission. The two definitions must still
+        differ in prose, or it is agreement."""
+        _, _, sets = self._corpus(
+            None,
+            None,
+            definition="an attack succeeds when any policy rule is violated",
+        )
+        # Give the second paper a different prose definition than the first.
+        sets[1].claims[0].payload["definition"] = (
+            "an attack succeeds when the task reaches a harmful outcome"
+        )
+        _, found = self._detect(sets)
+        assert [c.type for c in found] == ["DEFINITION_CONFLICT"]
+        assert found[0].severity == "MATERIAL", "no operational criterion, so not blocking"
+
+    def test_policy_escalates_with_a_named_rule(self):
+        """Never silently pick whose meaning wins. Primacy would decide it, but
+        primacy is unknown, so a named rule escalates - not the bare fallback."""
+        from papersynth.reconcile import Policy, PolicyEngine
+
+        _, _, sets = self._corpus(
+            "any out-of-policy tool call",
+            "a harmful end state is reached",
+        )
+        _, found = self._detect(sets)
+        engine = PolicyEngine(
+            Policy.load("config/reconcile_policy.yaml"),
+            auto_resolvable={"DEFINITION_CONFLICT": True},
+        )
+        res = engine.resolve_one(found[0])
+        assert res.is_open
+        assert res.outcome == "ESCALATED"
+        assert res.rule_fired == "definition_conflicts_escalate"
